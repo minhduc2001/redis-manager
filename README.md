@@ -4,7 +4,7 @@ A blazing fast, lightweight Redis GUI client for Windows. Designed to be a low-m
 
 ## 📥 Download & Install
 
-**[Download Redis Manager for Windows (v0.1.1)](https://github.com/minhduc2001/redis-manager/releases/download/v0.1.1/RedisManager_0.1.1_x64_en-US.msi)**
+**[Download Redis Manager for Windows (v0.1.2)](https://github.com/minhduc2001/redis-manager/releases/download/v0.1.2/RedisManager_0.1.2_x64_en-US.msi)**
 
 1. Download the `.msi` file from the link above.
 2. Run the installer and follow the setup wizard.

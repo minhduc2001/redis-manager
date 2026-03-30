@@ -34,16 +34,15 @@
   async function handleConnect() {
     connecting = true;
     try {
-      await connectRedis(url, password || undefined, connectionName.trim() || undefined);
-      // Auto-save connection
-      if (connectionName.trim()) {
-        saveConnection({
-          id: generateId(),
-          name: connectionName.trim(),
-          url,
-          password,
-        });
-      }
+      const connName = connectionName.trim() || url.split(',')[0] || 'Redis';
+      await connectRedis(url, password || undefined, connName);
+      // Always save connection
+      saveConnection({
+        id: generateId(),
+        name: connName,
+        url,
+        password,
+      });
       onConnected();
     } catch (e) {
       // error is set in store
@@ -51,14 +50,35 @@
     connecting = false;
   }
 
-  function loadFromSaved(conn: SavedConnection) {
+  let connectingId: string | null = null;
+  let confirmDeleteId: string | null = null;
+  let confirmDeleteName: string = '';
+
+  async function loadFromSaved(conn: SavedConnection) {
     url = conn.url;
     password = conn.password;
     connectionName = conn.name;
+    connectingId = conn.id;
+    connecting = true;
+    try {
+      await connectRedis(conn.url, conn.password || undefined, conn.name);
+      saveConnection(conn);
+      onConnected();
+    } catch (e) {
+      // error is set in store, user can retry manually
+    }
+    connecting = false;
+    connectingId = null;
   }
 
-  function deleteSaved(id: string) {
-    removeConnection(id);
+  function askDeleteSaved(id: string, name: string) {
+    confirmDeleteId = id;
+    confirmDeleteName = name;
+  }
+
+  function doDeleteSaved() {
+    if (confirmDeleteId) removeConnection(confirmDeleteId);
+    confirmDeleteId = null;
   }
 
   $: isCluster = url.includes(',');
@@ -158,21 +178,36 @@
         </button>
         {#if showSaved}
           <div class="saved-list animate-fade">
-            {#each $savedConnections as conn}
-              <div class="saved-item" on:click={() => loadFromSaved(conn)}>
+            {#each $savedConnections as conn (conn.id)}
+              <div class="saved-item" class:connecting={connectingId === conn.id} on:click={() => !connecting && loadFromSaved(conn)}>
                 <div class="saved-info">
-                  <span class="saved-name">{conn.name}</span>
+                  <span class="saved-name">
+                    {#if connectingId === conn.id}<span class="animate-spin">⟳</span>{/if}
+                    {conn.name}
+                  </span>
                   <span class="saved-url mono">{conn.url}</span>
                 </div>
                 <button
                   class="btn btn-icon btn-sm btn-danger"
-                  on:click|stopPropagation={() => deleteSaved(conn.id)}
+                  on:click|stopPropagation={() => askDeleteSaved(conn.id, conn.name)}
                   title="Delete"
                 >✕</button>
               </div>
             {/each}
           </div>
         {/if}
+      </div>
+    {/if}
+
+    {#if confirmDeleteId}
+      <div class="confirm-overlay" on:click={() => confirmDeleteId = null}>
+        <div class="confirm-modal animate-fade" on:click|stopPropagation>
+          <p>Delete saved connection <strong>{confirmDeleteName}</strong>?</p>
+          <div class="confirm-actions">
+            <button class="btn btn-sm" on:click={() => confirmDeleteId = null}>Cancel</button>
+            <button class="btn btn-sm btn-danger" on:click={doDeleteSaved}>Delete</button>
+          </div>
+        </div>
       </div>
     {/if}
   </div>
@@ -277,14 +312,32 @@
   .toggle-icon.open { transform: rotate(90deg); }
   .saved-list { margin-top: var(--gap-md); display: flex; flex-direction: column; gap: var(--gap-sm); }
   .saved-item {
-    display: flex; align-items: center; justify-content: space-between;
+    display: flex; align-items: center; gap: var(--gap-sm);
     padding: var(--gap-sm) var(--gap-md);
     background: var(--bg-tertiary); border: 1px solid var(--border-primary);
     border-radius: var(--radius-sm); cursor: pointer;
     transition: all var(--transition-fast);
   }
   .saved-item:hover { background: var(--bg-hover); border-color: var(--border-accent); }
-  .saved-info { display: flex; flex-direction: column; gap: 2px; }
-  .saved-name { font-weight: 500; font-size: 13px; }
-  .saved-url { font-size: 11px; color: var(--text-muted); }
+  .saved-info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; overflow: hidden; }
+  .saved-name { font-weight: 500; font-size: 13px; display: flex; align-items: center; gap: var(--gap-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .saved-url { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .saved-item.connecting { border-color: var(--accent); opacity: 0.8; pointer-events: none; }
+
+  .confirm-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000;
+  }
+  .confirm-modal {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-secondary);
+    border-radius: var(--radius-lg);
+    padding: var(--gap-lg);
+    min-width: 300px;
+    box-shadow: var(--shadow-lg);
+  }
+  .confirm-modal p { font-size: 13px; margin-bottom: var(--gap-md); }
+  .confirm-actions { display: flex; gap: var(--gap-sm); justify-content: flex-end; }
 </style>

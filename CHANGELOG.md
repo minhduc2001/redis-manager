@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.2
+
+### Bug Fixes
+- **Fix duplicate saved connections**: Deduplicate theo URL thay vì ID
+- **Auto-reconnect khi mở app**: Tự kết nối lại connection cuối cùng, vào thẳng giao diện chính
+- **Click saved = auto-connect**: Click vào saved connection sẽ connect luôn thay vì chỉ fill form
+- **Always save connection**: Mọi kết nối thành công đều được lưu lại
+- **Fix folder load-more button**: Button "Show more" trong tree view folder hoạt động đúng
+
 ## v0.1.1
 
 ### Bug Fixes

@@ -44,18 +44,31 @@ function loadSavedConnections(): SavedConnection[] {
 
 export function saveConnection(conn: SavedConnection) {
   savedConnections.update((list) => {
-    const idx = list.findIndex((c) => c.id === conn.id);
-    if (idx >= 0) list[idx] = conn;
-    else list.push(conn);
+    // Deduplicate by URL (not ID) to avoid duplicates when clicking saved + connecting
+    const idx = list.findIndex((c) => c.url === conn.url);
+    if (idx >= 0) {
+      list[idx] = { ...list[idx], name: conn.name, password: conn.password };
+    } else {
+      list.push(conn);
+    }
     localStorage.setItem('redis-manager-connections', JSON.stringify(list));
-    return list;
+    return [...list];
   });
 }
 
 export function removeConnection(id: string) {
   savedConnections.update((list) => {
+    const removed = list.find((c) => c.id === id);
     const filtered = list.filter((c) => c.id !== id);
     localStorage.setItem('redis-manager-connections', JSON.stringify(filtered));
+    // Remove from active-names list if present
+    if (removed) {
+      try {
+        const activeNames: string[] = JSON.parse(localStorage.getItem('redis-manager-active-names') || '[]');
+        const updated = activeNames.filter((n) => n !== removed.name);
+        localStorage.setItem('redis-manager-active-names', JSON.stringify(updated));
+      } catch {}
+    }
     return filtered;
   });
 }
@@ -94,6 +107,9 @@ export async function connectRedis(url: string, password?: string, name?: string
     // Load initial keys
     await loadKeys('*', true);
 
+    // Save active connections list
+    saveActiveConnections();
+
     return info;
   } catch (e: any) {
     error.set(e.toString());
@@ -101,6 +117,43 @@ export async function connectRedis(url: string, password?: string, name?: string
   } finally {
     isLoading.set(false);
   }
+}
+
+function saveActiveConnections() {
+  // Read saved connections and mark which ones are currently active
+  try {
+    const saved = JSON.parse(localStorage.getItem('redis-manager-connections') || '[]');
+    // Get current active connection tabs
+    let tabs: ConnectionTab[] = [];
+    const unsub = connectionTabs.subscribe((v) => (tabs = v));
+    unsub();
+    const activeUrls = tabs.map((t) => t.name);
+    localStorage.setItem('redis-manager-active-names', JSON.stringify(activeUrls));
+  } catch {}
+}
+
+export async function autoReconnectLast(): Promise<boolean> {
+  const savedConns: SavedConnection[] = loadSavedConnections();
+  const activeNames: string[] = (() => {
+    try {
+      return JSON.parse(localStorage.getItem('redis-manager-active-names') || '[]');
+    } catch { return []; }
+  })();
+
+  if (activeNames.length === 0 || savedConns.length === 0) return false;
+
+  let anySuccess = false;
+  for (const name of activeNames) {
+    const conn = savedConns.find((c) => c.name === name);
+    if (!conn) continue;
+    try {
+      await connectRedis(conn.url, conn.password || undefined, conn.name);
+      anySuccess = true;
+    } catch {
+      // Skip failed connections silently
+    }
+  }
+  return anySuccess;
 }
 
 export async function disconnectRedis(id?: string) {
@@ -114,6 +167,7 @@ export async function disconnectRedis(id?: string) {
 
     await invoke('disconnect_redis', { id: currentId });
     await refreshConnectionTabs();
+    saveActiveConnections();
 
     // Check if there are remaining connections
     let tabs: ConnectionTab[] = [];
@@ -131,6 +185,7 @@ export async function disconnectRedis(id?: string) {
       selectedKeys.set(new Set());
       keyDetail.set(null);
       error.set(null);
+      localStorage.removeItem('redis-manager-active-names');
     } else {
       // Switch to first available tab
       const newActive = tabs.find((t) => t.is_active) || tabs[0];
@@ -145,6 +200,16 @@ export async function switchConnection(id: string) {
   try {
     isLoading.set(true);
     error.set(null);
+
+    // Clear current data immediately to show loading state
+    keys.set([]);
+    scanCursor.set(0);
+    hasMore.set(true);
+    selectedKey.set(null);
+    keyDetail.set(null);
+    selectedKeys.set(new Set());
+    serverInfo.set(null);
+
     await invoke('set_active_connection', { id });
     activeConnectionId.set(id);
     await refreshConnectionTabs();

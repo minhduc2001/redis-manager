@@ -1,6 +1,7 @@
 <script lang="ts">
   import '../app.css';
-  import { isConnected } from '$lib/stores/redis';
+  import { onMount } from 'svelte';
+  import { isConnected, autoReconnectLast } from '$lib/stores/redis';
   import ConnectionForm from '$lib/components/ConnectionForm.svelte';
   import Sidebar from '$lib/components/Sidebar.svelte';
   import KeyBrowser from '$lib/components/KeyBrowser.svelte';
@@ -9,6 +10,11 @@
 
   let showAddConnection = false;
   let rightPanel: 'detail' | 'console' = 'detail';
+
+  onMount(() => {
+    // Try auto-reconnect silently, no blocking UI
+    autoReconnectLast();
+  });
 
   function handleAddConnection() {
     showAddConnection = true;
@@ -67,6 +73,16 @@
   .app {
     height: 100vh;
     overflow: hidden;
+  }
+  .loading-splash {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--gap-md);
+    color: var(--text-muted);
+    font-size: 14px;
   }
   .main-layout {
     display: grid;
