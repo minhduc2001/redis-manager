@@ -182,7 +182,7 @@
           </div>
           {#if expandedFolders.has(folder.prefix)}
             <div class="folder-children animate-fade">
-              {#each folder.keys.slice(0, getFolderLimit(folder.prefix)) as key (key.name)}
+              {#each folder.keys.slice(0, folderLimits.get(folder.prefix) || FOLDER_LIMIT) as key (key.name)}
                 <div class="key-item indent1" class:selected={$selectedKey === key.name} on:click={() => handleKeyClick(key.name)}>
                   <div class="key-checkbox" on:click={(e) => toggleSelect(key.name, e)}>
                     <div class="checkbox" class:checked={$selectedKeys.has(key.name)}>{#if $selectedKeys.has(key.name)}✓{/if}</div>
@@ -191,10 +191,10 @@
                   <span class="key-name truncate" title={key.name}>{key.shortName}</span>
                 </div>
               {/each}
-              {#if folder.keys.length > getFolderLimit(folder.prefix)}
+              {#if folder.keys.length > (folderLimits.get(folder.prefix) || FOLDER_LIMIT)}
                 <div class="folder-load-more">
                   <button class="btn btn-sm" on:click={() => showMoreInFolder(folder.prefix)}>
-                    Show more ({Math.min(getFolderLimit(folder.prefix), folder.keys.length)}/{folder.keys.length})
+                    Show more ({folderLimits.get(folder.prefix) || FOLDER_LIMIT}/{folder.keys.length})
                   </button>
                 </div>
               {/if}

@@ -37,16 +37,28 @@ impl RedisState {
         let is_cluster = urls.len() > 1;
 
         let (conn, mode) = if is_cluster {
-            let connection_urls: Vec<String> = urls.iter().map(|u| build_redis_url(u, password)).collect();
-            let url_refs: Vec<&str> = connection_urls.iter().map(|s| s.as_str()).collect();
-            let client = ClusterClient::new(url_refs).map_err(|e| format!("Failed to create cluster client: {}", e))?;
-            let con = client.get_async_connection().await.map_err(|e| format!("Failed to connect to cluster: {}", e))?;
-            (RedisConnection::Cluster(con), "cluster".to_string())
+            // Try cluster connection
+            match self.connect_cluster(&urls, password).await {
+                Ok(con) => (RedisConnection::Cluster(con), "cluster".to_string()),
+                Err(cluster_err) => {
+                    // If cluster fails, try connecting to the first node as standalone
+                    match self.connect_standalone(urls[0], password).await {
+                        Ok(con) => (RedisConnection::Standalone(con), "standalone".to_string()),
+                        Err(_) => return Err(format!("Cluster connection failed: {}. Also failed as standalone.", cluster_err)),
+                    }
+                }
+            }
         } else {
-            let connection_url = build_redis_url(urls[0], password);
-            let client = Client::open(connection_url.as_str()).map_err(|e| format!("Failed to create client: {}", e))?;
-            let con = client.get_multiplexed_async_connection().await.map_err(|e| format!("Failed to connect: {}", e))?;
-            (RedisConnection::Standalone(con), "standalone".to_string())
+            // Try standalone first, if it fails try as single-node cluster
+            match self.connect_standalone(urls[0], password).await {
+                Ok(con) => (RedisConnection::Standalone(con), "standalone".to_string()),
+                Err(standalone_err) => {
+                    match self.connect_cluster(&urls, password).await {
+                        Ok(con) => (RedisConnection::Cluster(con), "cluster".to_string()),
+                        Err(_) => return Err(format!("Connection failed: {}", standalone_err)),
+                    }
+                }
+            }
         };
 
         let entry = ConnectionEntry {
@@ -62,6 +74,30 @@ impl RedisState {
         *active = Some(id.to_string());
 
         Ok(mode)
+    }
+
+    async fn connect_standalone(&self, host: &str, password: Option<&str>) -> Result<MultiplexedConnection, String> {
+        let connection_url = build_redis_url(host, password);
+        let client = Client::open(connection_url.as_str())
+            .map_err(|e| format!("Failed to create client: {}", e))?;
+        let con = client.get_multiplexed_async_connection().await
+            .map_err(|e| format!("Failed to connect: {}", e))?;
+        Ok(con)
+    }
+
+    async fn connect_cluster(&self, urls: &[&str], password: Option<&str>) -> Result<ClusterConnection, String> {
+        let connection_urls: Vec<String> = urls.iter().map(|u| build_redis_url(u, password)).collect();
+        let url_refs: Vec<&str> = connection_urls.iter().map(|s| s.as_str()).collect();
+
+        let client = ClusterClient::builder(url_refs)
+            .retries(3)
+            .connection_timeout(std::time::Duration::from_secs(5))
+            .build()
+            .map_err(|e| format!("Failed to build cluster client: {}", e))?;
+
+        let con = client.get_async_connection().await
+            .map_err(|e| format!("Failed to connect to cluster: {}", e))?;
+        Ok(con)
     }
 
     pub async fn disconnect(&self, id: &str) -> Result<(), String> {
@@ -109,9 +145,16 @@ fn build_redis_url(host_port: &str, password: Option<&str>) -> String {
         .trim_start_matches("redis://")
         .trim_start_matches("rediss://");
 
+    // Remove any existing auth from the URL
+    let host = if clean.contains('@') {
+        clean.split('@').last().unwrap_or(clean)
+    } else {
+        clean
+    };
+
     match password {
-        Some(pwd) if !pwd.is_empty() => format!("redis://:{}@{}", pwd, clean),
-        _ => format!("redis://{}", clean),
+        Some(pwd) if !pwd.is_empty() => format!("redis://:{}@{}", pwd, host),
+        _ => format!("redis://{}", host),
     }
 }
 
@@ -119,17 +162,29 @@ pub async fn test_redis_connection(url: &str, password: Option<&str>) -> Result<
     let urls: Vec<&str> = url.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
 
     if urls.len() > 1 {
+        // Cluster
         let connection_urls: Vec<String> = urls.iter().map(|u| build_redis_url(u, password)).collect();
         let url_refs: Vec<&str> = connection_urls.iter().map(|s| s.as_str()).collect();
-        let client = ClusterClient::new(url_refs).map_err(|e| format!("Cluster error: {}", e))?;
-        let mut con = client.get_async_connection().await.map_err(|e| format!("Connection failed: {}", e))?;
-        let _: String = redis::cmd("PING").query_async(&mut con).await.map_err(|e| format!("Ping failed: {}", e))?;
+        let client = ClusterClient::builder(url_refs)
+            .retries(2)
+            .connection_timeout(std::time::Duration::from_secs(5))
+            .build()
+            .map_err(|e| format!("Cluster error: {}", e))?;
+        let mut con = client.get_async_connection().await
+            .map_err(|e| format!("Connection failed: {}", e))?;
+        let _: String = redis::cmd("PING").query_async(&mut con).await
+            .map_err(|e| format!("Ping failed: {}", e))?;
         Ok(true)
     } else {
+        // Standalone
         let connection_url = build_redis_url(urls[0], password);
-        let client = Client::open(connection_url.as_str()).map_err(|e| format!("Client error: {}", e))?;
-        let mut con = client.get_multiplexed_async_connection().await.map_err(|e| format!("Connection failed: {}", e))?;
-        let _: String = redis::cmd("PING").query_async(&mut con).await.map_err(|e| format!("Ping failed: {}", e))?;
+        let client = Client::open(connection_url.as_str())
+            .map_err(|e| format!("Client error: {}", e))?;
+        let mut con = client.get_multiplexed_async_connection().await
+            .map_err(|e| format!("Connection failed: {}", e))?;
+        let _: String = redis::cmd("PING").query_async(&mut con).await
+            .map_err(|e| format!("Ping failed: {}", e))?;
         Ok(true)
     }
 }
+
