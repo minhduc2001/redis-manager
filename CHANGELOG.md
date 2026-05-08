@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.1.3
+
+### Features
+- **Auto-Update**: Tích hợp `tauri-plugin-updater` giúp ứng dụng tự động kiểm tra và cập nhật khi có bản mới. Hiển thị thanh tiến trình tải xuống trực quan.
+- **Exact & Like Mode**: Chuyển đổi linh hoạt giữa tìm chính xác và tìm kiếm theo Full SCAN (chống quá tải server).
+- **Resizable Panels**: Cho phép kéo dãn Sidebar và danh sách Key giống VS Code, lưu trạng thái kích thước vào bộ nhớ.
+- **Sidebar thông minh hơn**: Phân loại màu sắc theo môi trường (PROD/UAT/DEV), thẻ trạng thái kết nối trực quan.
+
+### Bug Fixes
+- **Fix tìm kiếm bị sót Key**: Thay vì dùng `SCAN` 1 batch như cũ, giờ đã chuyển sang Full SCAN cho đến `cursor = 0` đảm bảo không bị lặp hay sót key.
+- **Sửa lỗi UI/UX**: Tự động ẩn nút "Scan more" khi đang trong chế độ tìm kiếm để tránh nhầm lẫn.
+- **Fix đường dẫn import**: Sửa lại các đường dẫn type bị sai (`Cannot find module`).
+
 ## v0.1.2
 
 ### Bug Fixes
