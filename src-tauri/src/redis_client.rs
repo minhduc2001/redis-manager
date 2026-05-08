@@ -129,12 +129,12 @@ impl RedisState {
         Ok(entry.connection.clone())
     }
 
-    pub async fn get_connection_list(&self) -> Vec<(String, String, String, String)> {
+    pub async fn get_connection_list(&self) -> Vec<(String, String, String, String, String)> {
         let conns = self.connections.lock().await;
         let active = self.active_id.lock().await;
         let active_id = active.as_deref().unwrap_or("");
         conns.iter().map(|(id, entry)| {
-            (id.clone(), entry.name.clone(), entry.mode.clone(), (id == active_id).to_string())
+            (id.clone(), entry.name.clone(), entry.mode.clone(), (id == active_id).to_string(), entry.url.clone())
         }).collect()
     }
 }

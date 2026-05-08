@@ -82,6 +82,17 @@ function generateId() {
 // Actions
 export async function connectRedis(url: string, password?: string, name?: string) {
   try {
+    // Prevent duplicate connections to the same URL
+    let tabs: ConnectionTab[] = [];
+    const unsubTabs = connectionTabs.subscribe((v) => (tabs = v));
+    unsubTabs();
+
+    const existing = tabs.find((t) => t.url === url);
+    if (existing) {
+      await switchConnection(existing.id);
+      return { id: existing.id, name: existing.name, mode: existing.mode, url: existing.url };
+    }
+
     isLoading.set(true);
     error.set(null);
     const id = generateId();

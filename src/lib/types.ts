@@ -10,6 +10,7 @@ export interface ConnectionTab {
   name: string;
   mode: string;
   is_active: boolean;
+  url: string;
 }
 
 export interface ServerInfo {

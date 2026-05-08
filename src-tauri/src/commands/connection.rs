@@ -26,6 +26,7 @@ pub struct ConnectionTab {
     pub name: String,
     pub mode: String,
     pub is_active: bool,
+    pub url: String,
 }
 
 #[tauri::command]
@@ -67,11 +68,12 @@ pub async fn get_connections(
     state: State<'_, RedisState>,
 ) -> Result<Vec<ConnectionTab>, String> {
     let list = state.get_connection_list().await;
-    Ok(list.into_iter().map(|(id, name, mode, is_active)| ConnectionTab {
+    Ok(list.into_iter().map(|(id, name, mode, is_active, url)| ConnectionTab {
         id,
         name,
         mode,
         is_active: is_active == "true",
+        url,
     }).collect())
 }
 

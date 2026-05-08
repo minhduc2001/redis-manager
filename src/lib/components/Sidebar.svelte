@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { getVersion } from '@tauri-apps/api/app';
   import {
     isConnected,
     connectionTabs,
@@ -13,6 +15,15 @@
 
   let confirmDisconnectId: string | null = null;
   let confirmDisconnectName: string = '';
+  let appVersion = '';
+
+  onMount(async () => {
+    try {
+      appVersion = await getVersion();
+    } catch (e) {
+      console.warn('Failed to get app version:', e);
+    }
+  });
 
   $: uptime = $serverInfo ? formatUptime(parseInt($serverInfo.uptime_in_seconds)) : '';
 
@@ -62,7 +73,12 @@
         <path d="M12 22V12M2 7l10 5 10-5" stroke="var(--accent)" stroke-width="1.5"/>
         <circle cx="12" cy="12" r="2" fill="var(--accent)"/>
       </svg>
-      <span class="app-title">Redis Manager</span>
+      <div style="display: flex; flex-direction: column; gap: 2px;">
+        <span class="app-title">Redis Manager</span>
+        {#if appVersion}
+          <span style="font-size: 10px; color: var(--text-muted); line-height: 1; font-family: var(--font-mono);">v{appVersion}</span>
+        {/if}
+      </div>
     </div>
   </div>
 

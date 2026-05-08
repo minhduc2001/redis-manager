@@ -182,6 +182,26 @@
     };
     return classes[t] || 'badge-unknown';
   }
+
+  let copyStatus: Record<string, boolean> = {};
+
+  async function copyText(text: string, id: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      copyStatus = { ...copyStatus, [id]: true };
+      setTimeout(() => {
+        copyStatus = { ...copyStatus, [id]: false };
+      }, 2000);
+    } catch (err) {
+      console.error('Failed to copy', err);
+    }
+  }
+
+  function getValueString(): string {
+    if (!$keyDetail) return '';
+    if ($keyDetail.value.type === 'String') return $keyDetail.value.data;
+    return JSON.stringify($keyDetail.value.data, null, 2);
+  }
 </script>
 
 <div class="key-detail">
@@ -213,7 +233,12 @@
               <button class="btn btn-sm" on:click={() => renamingKey = false}>Cancel</button>
             </div>
           {:else}
-            <h3 class="key-title mono truncate" title={$keyDetail.key}>{$keyDetail.key}</h3>
+            <div class="key-title-wrapper">
+              <h3 class="key-title mono truncate" title={$keyDetail.key}>{$keyDetail.key}</h3>
+              <button class="btn btn-sm btn-icon copy-btn" on:click={() => copyText($keyDetail.key, 'key')} title="Copy Key">
+                {copyStatus['key'] ? '✅' : '📋'}
+              </button>
+            </div>
           {/if}
           <div class="key-meta">
             <span class="badge {getTypeBadgeClass($keyDetail.key_type)}">{$keyDetail.key_type}</span>
@@ -222,6 +247,9 @@
           </div>
         </div>
         <div class="detail-actions">
+          <button class="btn btn-sm" on:click={() => copyText(getValueString(), 'val')} title="Copy Value">
+            {copyStatus['val'] ? '✅ Copied' : '📋 Copy'}
+          </button>
           <button class="btn btn-sm" on:click={startRename} title="Rename key">✏ Rename</button>
           <button class="btn btn-sm" on:click={() => loadKeyDetail($keyDetail.key)} title="Refresh">⟳</button>
           <button class="btn btn-sm btn-danger" on:click={askDeleteKey} title="Delete key">🗑</button>
@@ -288,7 +316,12 @@
                       {#if editingHashField === item.field}
                         <input class="input input-mono" bind:value={editingHashValue} on:keydown={(e) => e.key === 'Enter' && saveHashFieldEdit()} />
                       {:else}
-                        <span class="cell-value" title={item.value}>{item.value}</span>
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px;">
+                          <span class="cell-value" title={item.value}>{item.value}</span>
+                          <button class="btn btn-sm btn-icon copy-btn" on:click={() => copyText(item.value, `hf_${item.field}`)} title="Copy field value">
+                            {copyStatus[`hf_${item.field}`] ? '✅' : '📋'}
+                          </button>
+                        </div>
                       {/if}
                     </td>
                     <td>
@@ -433,6 +466,27 @@
     font-weight: 600;
     margin-bottom: var(--gap-sm);
     word-break: break-all;
+  }
+  .key-title-wrapper {
+    display: flex;
+    align-items: center;
+    gap: var(--gap-sm);
+    margin-bottom: var(--gap-sm);
+  }
+  .key-title-wrapper .key-title {
+    margin-bottom: 0;
+  }
+  .copy-btn {
+    font-size: 14px;
+    padding: 2px 6px;
+    background: transparent;
+    border-color: transparent;
+    opacity: 0.5;
+    transition: all 0.2s;
+  }
+  .copy-btn:hover {
+    opacity: 1;
+    background: var(--bg-hover);
   }
   .key-meta {
     display: flex;
