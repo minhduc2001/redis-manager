@@ -120,6 +120,116 @@ pub async fn scan_keys(
 }
 
 #[tauri::command]
+pub async fn search_keys(
+    state: State<'_, RedisState>,
+    pattern: String,
+    max_results: Option<u64>,
+) -> Result<ScanResult, String> {
+    let conn = state.get_active_connection().await?;
+    let max = max_results.unwrap_or(500) as usize;
+    let pattern = if pattern.is_empty() { "*".to_string() } else { pattern };
+
+    match conn {
+        RedisConnection::Standalone(mut con) => {
+            let mut all_keys: Vec<String> = Vec::new();
+            let mut cursor: u64 = 0;
+
+            loop {
+                let (new_cursor, batch): (u64, Vec<String>) = redis::cmd("SCAN")
+                    .arg(cursor)
+                    .arg("MATCH")
+                    .arg(&pattern)
+                    .arg("COUNT")
+                    .arg(500u64)
+                    .query_async(&mut con)
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                for key in batch {
+                    if !all_keys.contains(&key) {
+                        all_keys.push(key);
+                    }
+                    if all_keys.len() >= max {
+                        break;
+                    }
+                }
+
+                cursor = new_cursor;
+                if cursor == 0 || all_keys.len() >= max {
+                    break;
+                }
+            }
+
+            let mut entries = Vec::new();
+            for key in &all_keys {
+                let kt: String = redis::cmd("TYPE")
+                    .arg(key)
+                    .query_async(&mut con)
+                    .await
+                    .unwrap_or_else(|_| "unknown".to_string());
+                entries.push(KeyEntry {
+                    name: key.clone(),
+                    key_type: kt,
+                });
+            }
+
+            Ok(ScanResult {
+                cursor: 0,
+                keys: entries,
+            })
+        }
+        RedisConnection::Cluster(mut con) => {
+            let mut all_keys: Vec<String> = Vec::new();
+            let mut cursor: u64 = 0;
+
+            loop {
+                let (new_cursor, batch): (u64, Vec<String>) = redis::cmd("SCAN")
+                    .arg(cursor)
+                    .arg("MATCH")
+                    .arg(&pattern)
+                    .arg("COUNT")
+                    .arg(500u64)
+                    .query_async(&mut con)
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                for key in batch {
+                    if !all_keys.contains(&key) {
+                        all_keys.push(key);
+                    }
+                    if all_keys.len() >= max {
+                        break;
+                    }
+                }
+
+                cursor = new_cursor;
+                if cursor == 0 || all_keys.len() >= max {
+                    break;
+                }
+            }
+
+            let mut entries = Vec::new();
+            for key in &all_keys {
+                let kt: String = redis::cmd("TYPE")
+                    .arg(key)
+                    .query_async(&mut con)
+                    .await
+                    .unwrap_or_else(|_| "unknown".to_string());
+                entries.push(KeyEntry {
+                    name: key.clone(),
+                    key_type: kt,
+                });
+            }
+
+            Ok(ScanResult {
+                cursor: 0,
+                keys: entries,
+            })
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn get_key_detail(
     state: State<'_, RedisState>,
     key: String,

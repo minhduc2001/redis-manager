@@ -8,7 +8,7 @@ import type {
   ScanResult,
   KeyDetail,
   SavedConnection,
-} from './types';
+} from '$lib/types';
 
 // Connection state
 export const isConnected = writable(false);
@@ -21,7 +21,9 @@ export const keys = writable<KeyEntry[]>([]);
 export const scanCursor = writable(0);
 export const hasMore = writable(true);
 export const isLoading = writable(false);
+export const isSearching = writable(false);
 export const searchPattern = writable('*');
+export const searchMode = writable<'exact' | 'like'>('exact');
 export const selectedKey = writable<string | null>(null);
 export const selectedKeys = writable<Set<string>>(new Set());
 export const keyDetail = writable<KeyDetail | null>(null);
@@ -296,6 +298,67 @@ export async function loadKeys(pattern?: string, reset = false) {
     error.set(e.toString());
   } finally {
     isLoading.set(false);
+  }
+}
+
+export async function searchKeys(pattern: string, mode: 'exact' | 'like') {
+  try {
+    isSearching.set(true);
+    isLoading.set(true);
+    error.set(null);
+
+    // Build the search pattern based on mode
+    let searchPat: string;
+    if (!pattern.trim()) {
+      searchPat = '*';
+    } else if (mode === 'exact') {
+      // Exact: use pattern as-is (user provides exact key name)
+      searchPat = pattern.trim();
+    } else {
+      // Like: auto-wrap with wildcards if user didn't add them
+      const trimmed = pattern.trim();
+      if (trimmed.includes('*')) {
+        searchPat = trimmed; // User already has wildcards
+      } else {
+        searchPat = `*${trimmed}*`; // Wrap with wildcards for substring match
+      }
+    }
+
+    searchPattern.set(searchPat);
+    searchMode.set(mode);
+
+    if (mode === 'exact' && !pattern.includes('*')) {
+      // For exact mode without wildcards, try to get the key directly
+      try {
+        const detail = await invoke<any>('get_key_detail', { key: pattern.trim() });
+        // Key exists — show it in the list
+        keys.set([{ name: detail.key, key_type: detail.key_type }]);
+        scanCursor.set(0);
+        hasMore.set(false);
+        return;
+      } catch {
+        // Key doesn't exist, fall through to scan
+        keys.set([]);
+        scanCursor.set(0);
+        hasMore.set(false);
+        return;
+      }
+    }
+
+    // Like mode or exact with wildcards: full scan
+    const result = await invoke<ScanResult>('search_keys', {
+      pattern: searchPat,
+      maxResults: 500,
+    });
+
+    keys.set(result.keys);
+    scanCursor.set(0);
+    hasMore.set(false); // Full scan is complete
+  } catch (e: any) {
+    error.set(e.toString());
+  } finally {
+    isLoading.set(false);
+    isSearching.set(false);
   }
 }
 

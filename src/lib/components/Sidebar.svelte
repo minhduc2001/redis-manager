@@ -43,6 +43,15 @@
     }
     confirmDisconnectId = null;
   }
+
+  // Environment color based on name
+  function getEnvColor(name: string): string {
+    const n = name.toLowerCase();
+    if (n.includes('prod')) return '#ef5350';
+    if (n.includes('uat') || n.includes('staging')) return '#ffa726';
+    if (n.includes('dev') || n.includes('local')) return '#66bb6a';
+    return '#4fc3f7';
+  }
 </script>
 
 <div class="sidebar">
@@ -57,31 +66,48 @@
     </div>
   </div>
 
-  <!-- Connection Tabs -->
+  <!-- Connection Cards -->
   {#if $connectionTabs.length > 0}
-    <div class="conn-tabs">
-      <div class="tabs-header">
-        <span class="tabs-label">Connections</span>
-        <button class="btn btn-sm btn-icon" on:click={onAddConnection} title="Add connection">+</button>
+    <div class="conn-section">
+      <div class="section-header">
+        <span class="section-label">Connections</span>
+        <span class="conn-count">{$connectionTabs.length}</span>
+        <button class="btn-add" on:click={onAddConnection} title="Add connection">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+        </button>
       </div>
-      {#each $connectionTabs as tab (tab.id)}
-        <div
-          class="conn-tab"
-          class:active={tab.is_active}
-          on:click={() => handleSwitch(tab.id)}
-        >
-          <div class="tab-dot" class:active={tab.is_active}></div>
-          <div class="tab-info">
-            <span class="tab-name">{tab.name}</span>
-            <span class="tab-mode badge {tab.mode === 'cluster' ? 'badge-hash' : 'badge-string'}">{tab.mode}</span>
+      <div class="conn-list">
+        {#each $connectionTabs as tab (tab.id)}
+          <div
+            class="conn-card"
+            class:active={tab.is_active}
+            on:click={() => handleSwitch(tab.id)}
+          >
+            <div class="card-indicator" style="background: {tab.is_active ? getEnvColor(tab.name) : 'transparent'}"></div>
+            <div class="card-content">
+              <div class="card-top">
+                <span class="card-dot" class:active={tab.is_active} style="--dot-color: {getEnvColor(tab.name)}"></span>
+                <span class="card-name">{tab.name}</span>
+                <span class="card-mode badge {tab.mode === 'cluster' ? 'badge-hash' : 'badge-string'}">{tab.mode}</span>
+              </div>
+              <div class="card-bottom">
+                <span class="card-status">{tab.is_active ? 'Active' : 'Connected'}</span>
+              </div>
+            </div>
+            <button
+              class="card-close"
+              on:click|stopPropagation={() => askDisconnect(tab.id, tab.name)}
+              title="Disconnect"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M18 6L6 18M6 6l12 12"/>
+              </svg>
+            </button>
           </div>
-          <button
-            class="tab-close"
-            on:click|stopPropagation={() => askDisconnect(tab.id, tab.name)}
-            title="Disconnect"
-          >✕</button>
-        </div>
-      {/each}
+        {/each}
+      </div>
     </div>
   {/if}
 
@@ -138,12 +164,12 @@
     flex-direction: column;
     height: 100%;
     background: var(--bg-secondary);
-    border-right: 1px solid var(--border-primary);
     overflow-y: auto;
   }
   .sidebar-header {
     padding: var(--gap-md) var(--gap-lg);
     border-bottom: 1px solid var(--border-primary);
+    flex-shrink: 0;
   }
   .app-logo { display: flex; align-items: center; gap: var(--gap-sm); }
   .app-title {
@@ -153,52 +179,156 @@
     background-clip: text;
   }
 
-  /* Connection tabs */
-  .conn-tabs {
+  /* Connection section */
+  .conn-section {
     border-bottom: 1px solid var(--border-primary);
-    padding: var(--gap-sm) 0;
+    flex-shrink: 0;
   }
-  .tabs-header {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 0 var(--gap-md) var(--gap-xs);
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: var(--gap-sm);
+    padding: var(--gap-sm) var(--gap-md);
+  }
+  .section-label {
     font-size: 10px; font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.5px;
     color: var(--text-muted);
+    flex: 1;
   }
-  .conn-tab {
-    display: flex; align-items: center; gap: var(--gap-sm);
-    padding: 6px var(--gap-md);
-    cursor: pointer; transition: all var(--transition-fast);
-    border-left: 2px solid transparent;
+  .conn-count {
+    font-size: 9px;
+    font-weight: 700;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-muted);
+    padding: 1px 6px;
+    border-radius: 8px;
   }
-  .conn-tab:hover { background: var(--bg-hover); }
-  .conn-tab.active {
+  .btn-add {
+    background: none;
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition-fast);
+  }
+  .btn-add:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: rgba(0, 212, 255, 0.06);
+  }
+
+  .conn-list {
+    padding: 0 var(--gap-sm) var(--gap-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  /* Connection card */
+  .conn-card {
+    display: flex;
+    align-items: center;
+    gap: var(--gap-sm);
+    padding: 8px var(--gap-sm);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    border-radius: var(--radius-sm);
+    position: relative;
+    overflow: hidden;
+  }
+  .conn-card:hover {
+    background: var(--bg-hover);
+  }
+  .conn-card.active {
     background: var(--bg-active);
-    border-left-color: var(--accent);
   }
-  .tab-dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--text-muted); flex-shrink: 0;
+
+  .card-indicator {
+    width: 3px;
+    height: 28px;
+    border-radius: 2px;
+    flex-shrink: 0;
+    transition: background var(--transition-fast);
   }
-  .tab-dot.active {
-    background: var(--success);
-    box-shadow: 0 0 6px var(--success);
+
+  .card-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
-  .tab-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-  .tab-name { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .tab-mode { width: fit-content; font-size: 9px; }
-  .tab-close {
-    background: none; border: none; color: var(--text-muted);
-    cursor: pointer; padding: 2px 4px; font-size: 10px;
-    border-radius: 3px; opacity: 0; transition: all var(--transition-fast);
+  .card-top {
+    display: flex;
+    align-items: center;
+    gap: var(--gap-xs);
   }
-  .conn-tab:hover .tab-close { opacity: 1; }
-  .tab-close:hover { color: var(--error); background: rgba(255,82,82,0.1); }
+  .card-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    flex-shrink: 0;
+    transition: all var(--transition-fast);
+  }
+  .card-dot.active {
+    background: var(--dot-color, var(--success));
+    box-shadow: 0 0 6px var(--dot-color, var(--success));
+  }
+  .card-name {
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+  }
+  .card-mode {
+    font-size: 8px;
+    padding: 1px 5px;
+    flex-shrink: 0;
+  }
+  .card-bottom {
+    display: flex;
+    align-items: center;
+    gap: var(--gap-sm);
+    padding-left: 11px; /* align with text after dot */
+  }
+  .card-status {
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  .card-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    opacity: 0;
+    transition: all var(--transition-fast);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .conn-card:hover .card-close { opacity: 1; }
+  .card-close:hover {
+    color: var(--error);
+    background: rgba(255, 82, 82, 0.1);
+  }
 
   /* Server info */
   .server-info {
     padding: var(--gap-md) var(--gap-lg);
     border-bottom: 1px solid var(--border-primary);
+    flex-shrink: 0;
   }
   .info-grid {
     display: grid; grid-template-columns: 1fr 1fr;

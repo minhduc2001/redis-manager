@@ -9,6 +9,12 @@ use commands::keys::*;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            Ok(())
+        })
         .manage(RedisState::new())
         .invoke_handler(tauri::generate_handler![
             connect_redis,
@@ -18,6 +24,7 @@ pub fn run() {
             test_connection,
             get_server_info,
             scan_keys,
+            search_keys,
             get_key_detail,
             set_key_value,
             set_hash_field,

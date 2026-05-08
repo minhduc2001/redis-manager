@@ -8,6 +8,8 @@
     deleteSelectedKeys,
     hasMore,
     isLoading,
+    isSearching,
+    searchPattern,
   } from '$lib/stores/redis';
   import SearchBar from './SearchBar.svelte';
 
@@ -233,7 +235,7 @@
       {/if}
     {/if}
 
-    {#if $hasMore}
+    {#if $hasMore && !$isSearching}
       <div class="load-more">
         <button class="btn btn-sm btn-primary" on:click={loadMore} disabled={$isLoading}>
           {#if $isLoading}
@@ -247,11 +249,15 @@
   </div>
 
   <div class="browser-footer">
-    <span class="text-muted">{$keys.length} keys loaded</span>
+    {#if $searchPattern !== '*'}
+      <span class="text-accent">🔍 {$keys.length} results</span>
+    {:else}
+      <span class="text-muted">{$keys.length} keys loaded</span>
+    {/if}
     {#if viewMode === 'flat'}
       <span class="text-muted">• Showing {displayedCount}</span>
     {/if}
-    {#if $hasMore}
+    {#if $hasMore && $searchPattern === '*'}
       <span class="text-accent">• More available</span>
     {/if}
   </div>
