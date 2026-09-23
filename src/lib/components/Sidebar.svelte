@@ -26,6 +26,13 @@
   });
 
   $: uptime = $serverInfo ? formatUptime(parseInt($serverInfo.uptime_in_seconds)) : '';
+  $: formattedTotalKeys = $serverInfo?.total_keys ? formatNumber($serverInfo.total_keys) : '0';
+
+  function formatNumber(str: string): string {
+    const num = parseInt(str);
+    if (isNaN(num)) return str;
+    return num.toLocaleString();
+  }
 
   function formatUptime(seconds: number): string {
     if (isNaN(seconds)) return 'N/A';
@@ -55,47 +62,53 @@
     confirmDisconnectId = null;
   }
 
-  // Environment color based on name
   function getEnvColor(name: string): string {
     const n = name.toLowerCase();
-    if (n.includes('prod')) return '#ef5350';
-    if (n.includes('uat') || n.includes('staging')) return '#ffa726';
-    if (n.includes('dev') || n.includes('local')) return '#66bb6a';
-    return '#4fc3f7';
+    if (n.includes('prod')) return '#ef4444';
+    if (n.includes('uat') || n.includes('staging')) return '#f59e0b';
+    if (n.includes('dev') || n.includes('local')) return '#10b981';
+    return '#06b6d4';
   }
 </script>
 
 <div class="sidebar">
   <div class="sidebar-header">
     <div class="app-logo">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-        <path d="M12 2L2 7v10l10 5 10-5V7L12 2z" stroke="var(--accent)" stroke-width="1.5" fill="rgba(0,212,255,0.1)"/>
-        <path d="M12 22V12M2 7l10 5 10-5" stroke="var(--accent)" stroke-width="1.5"/>
-        <circle cx="12" cy="12" r="2" fill="var(--accent)"/>
-      </svg>
-      <div style="display: flex; flex-direction: column; gap: 2px;">
+      <div class="logo-icon-wrap">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+          <path d="M12 2L2 7v10l10 5 10-5V7L12 2z" stroke="var(--accent)" stroke-width="1.8" fill="rgba(0,212,255,0.12)"/>
+          <path d="M12 22V12M2 7l10 5 10-5" stroke="var(--accent)" stroke-width="1.8"/>
+          <circle cx="12" cy="12" r="2.5" fill="var(--accent)"/>
+        </svg>
+      </div>
+      <div class="logo-text-wrap">
         <span class="app-title">Redis Manager</span>
         {#if appVersion}
-          <span style="font-size: 10px; color: var(--text-muted); line-height: 1; font-family: var(--font-mono);">v{appVersion}</span>
+          <span class="app-ver">v{appVersion}</span>
         {/if}
       </div>
     </div>
   </div>
 
-  <!-- Connection Cards -->
+  <!-- Connections Section -->
   {#if $connectionTabs.length > 0}
     <div class="conn-section">
       <div class="section-header">
-        <span class="section-label">Connections</span>
-        <span class="conn-count">{$connectionTabs.length}</span>
-        <button class="btn-add" on:click={onAddConnection} title="Add connection">
+        <div class="section-title-wrap">
+          <span class="section-label">Connections</span>
+          <span class="conn-count">{$connectionTabs.length}</span>
+        </div>
+        <button class="btn-add" on:click={onAddConnection} title="Add another Redis connection">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <path d="M12 5v14M5 12h14"/>
           </svg>
         </button>
       </div>
+
       <div class="conn-list">
         {#each $connectionTabs as tab (tab.id)}
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
             class="conn-card"
             class:active={tab.is_active}
@@ -104,12 +117,19 @@
             <div class="card-indicator" style="background: {tab.is_active ? getEnvColor(tab.name) : 'transparent'}"></div>
             <div class="card-content">
               <div class="card-top">
-                <span class="card-dot" class:active={tab.is_active} style="--dot-color: {getEnvColor(tab.name)}"></span>
-                <span class="card-name">{tab.name}</span>
-                <span class="card-mode badge {tab.mode === 'cluster' ? 'badge-hash' : 'badge-string'}">{tab.mode}</span>
+                <span
+                  class="card-dot"
+                  class:active={tab.is_active}
+                  style="--dot-color: {getEnvColor(tab.name)}"
+                ></span>
+                <span class="card-name" title={tab.name}>{tab.name}</span>
+                <span class="card-mode badge {tab.mode === 'cluster' ? 'badge-hash' : 'badge-string'}">
+                  {tab.mode === 'cluster' ? 'CLUSTER' : 'STANDALONE'}
+                </span>
               </div>
               <div class="card-bottom">
-                <span class="card-status">{tab.is_active ? 'Active' : 'Connected'}</span>
+                <span class="card-status">{tab.is_active ? '● Active' : 'Connected'}</span>
+                <span class="card-url truncate" title={tab.url}>{tab.url}</span>
               </div>
             </div>
             <button
@@ -127,8 +147,16 @@
     </div>
   {/if}
 
+  <!-- Server Info Metrics -->
   {#if $isConnected && $serverInfo}
     <div class="server-info animate-fade">
+      <div class="info-header">
+        <span class="info-title">SERVER STATS</span>
+        <span class="badge { $serverInfo.mode === 'cluster' ? 'badge-hash' : 'badge-string' }">
+          {$serverInfo.mode.toUpperCase()}
+        </span>
+      </div>
+
       <div class="info-grid">
         <div class="info-item">
           <span class="info-label">Version</span>
@@ -136,17 +164,17 @@
         </div>
         <div class="info-item">
           <span class="info-label">Memory</span>
-          <span class="info-value mono">{$serverInfo.used_memory_human}</span>
+          <span class="info-value mono text-accent">{$serverInfo.used_memory_human}</span>
         </div>
         <div class="info-item">
-          <span class="info-label">Keys</span>
-          <span class="info-value mono">{$serverInfo.total_keys}</span>
+          <span class="info-label">Total Keys</span>
+          <span class="info-value mono text-success">{formattedTotalKeys}</span>
         </div>
         <div class="info-item">
           <span class="info-label">Clients</span>
           <span class="info-value mono">{$serverInfo.connected_clients}</span>
         </div>
-        <div class="info-item">
+        <div class="info-item full-width">
           <span class="info-label">Uptime</span>
           <span class="info-value mono">{uptime}</span>
         </div>
@@ -156,13 +184,18 @@
 
   {#if $error}
     <div class="error-banner animate-fade">
-      <span>⚠ {$error}</span>
+      <div class="error-msg truncate">⚠ {$error}</div>
       <button class="btn btn-sm btn-icon" on:click={() => error.set(null)}>✕</button>
     </div>
   {/if}
 
+  <!-- Confirm Disconnect Modal -->
   {#if confirmDisconnectId}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="confirm-overlay" on:click={() => confirmDisconnectId = null}>
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="confirm-modal animate-fade" on:click|stopPropagation>
         <p>Disconnect <strong>{confirmDisconnectName}</strong>?</p>
         <div class="confirm-actions">
@@ -180,19 +213,42 @@
     flex-direction: column;
     height: 100%;
     background: var(--bg-secondary);
+    border-right: 1px solid var(--border-primary);
     overflow-y: auto;
   }
+
   .sidebar-header {
-    padding: var(--gap-md) var(--gap-lg);
+    padding: var(--gap-md) var(--gap-md);
     border-bottom: 1px solid var(--border-primary);
     flex-shrink: 0;
   }
-  .app-logo { display: flex; align-items: center; gap: var(--gap-sm); }
+  .app-logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .logo-icon-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .logo-text-wrap {
+    display: flex;
+    flex-direction: column;
+  }
   .app-title {
-    font-size: 14px; font-weight: 700;
-    background: linear-gradient(135deg, var(--accent), #a78bfa);
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: -0.2px;
+    background: linear-gradient(135deg, var(--accent), #c084fc);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
     background-clip: text;
+  }
+  .app-ver {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
   }
 
   /* Connection section */
@@ -203,22 +259,28 @@
   .section-header {
     display: flex;
     align-items: center;
-    gap: var(--gap-sm);
+    justify-content: space-between;
     padding: var(--gap-sm) var(--gap-md);
   }
+  .section-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
   .section-label {
-    font-size: 10px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.5px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
     color: var(--text-muted);
-    flex: 1;
   }
   .conn-count {
     font-size: 9px;
     font-weight: 700;
-    background: rgba(255, 255, 255, 0.06);
-    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-secondary);
     padding: 1px 6px;
-    border-radius: 8px;
+    border-radius: 999px;
   }
   .btn-add {
     background: none;
@@ -226,7 +288,7 @@
     border-radius: var(--radius-sm);
     color: var(--text-muted);
     cursor: pointer;
-    padding: 3px;
+    padding: 2px 6px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -235,11 +297,11 @@
   .btn-add:hover {
     color: var(--accent);
     border-color: var(--accent);
-    background: rgba(0, 212, 255, 0.06);
+    background: rgba(0, 212, 255, 0.08);
   }
 
   .conn-list {
-    padding: 0 var(--gap-sm) var(--gap-sm);
+    padding: 0 var(--gap-xs) var(--gap-sm);
     display: flex;
     flex-direction: column;
     gap: 3px;
@@ -249,8 +311,8 @@
   .conn-card {
     display: flex;
     align-items: center;
-    gap: var(--gap-sm);
-    padding: 8px var(--gap-sm);
+    gap: 6px;
+    padding: 7px 8px;
     cursor: pointer;
     transition: all var(--transition-fast);
     border-radius: var(--radius-sm);
@@ -262,11 +324,12 @@
   }
   .conn-card.active {
     background: var(--bg-active);
+    box-shadow: inset 0 0 12px rgba(0, 212, 255, 0.05);
   }
 
   .card-indicator {
     width: 3px;
-    height: 28px;
+    height: 30px;
     border-radius: 2px;
     flex-shrink: 0;
     transition: background var(--transition-fast);
@@ -282,10 +345,11 @@
   .card-top {
     display: flex;
     align-items: center;
-    gap: var(--gap-xs);
+    gap: 6px;
   }
   .card-dot {
-    width: 7px; height: 7px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     background: var(--text-muted);
     flex-shrink: 0;
@@ -297,7 +361,7 @@
   }
   .card-name {
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -312,12 +376,19 @@
   .card-bottom {
     display: flex;
     align-items: center;
-    gap: var(--gap-sm);
-    padding-left: 11px; /* align with text after dot */
+    gap: 8px;
+    padding-left: 12px;
+    font-size: 10px;
   }
   .card-status {
-    font-size: 10px;
+    color: var(--text-accent);
+    font-weight: 500;
+  }
+  .card-url {
     color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    flex: 1;
   }
 
   .card-close {
@@ -334,45 +405,87 @@
     justify-content: center;
     flex-shrink: 0;
   }
-  .conn-card:hover .card-close { opacity: 1; }
+  .conn-card:hover .card-close {
+    opacity: 1;
+  }
   .card-close:hover {
     color: var(--error);
-    background: rgba(255, 82, 82, 0.1);
+    background: rgba(255, 82, 82, 0.12);
   }
 
-  /* Server info */
+  /* Server Info */
   .server-info {
-    padding: var(--gap-md) var(--gap-lg);
+    padding: var(--gap-md) var(--gap-md);
     border-bottom: 1px solid var(--border-primary);
     flex-shrink: 0;
   }
+  .info-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .info-title {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 0.6px;
+  }
   .info-grid {
-    display: grid; grid-template-columns: 1fr 1fr;
-    gap: var(--gap-xs) var(--gap-md);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
   }
-  .info-item { display: flex; flex-direction: column; gap: 1px; }
+  .info-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--bg-primary);
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-primary);
+  }
+  .info-item.full-width {
+    grid-column: span 2;
+  }
   .info-label {
-    font-size: 10px; color: var(--text-muted);
-    text-transform: uppercase; letter-spacing: 0.5px;
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
   }
-  .info-value { font-size: 12px; }
+  .info-value {
+    font-size: 11px;
+    font-weight: 600;
+  }
 
   .error-banner {
     margin: var(--gap-sm) var(--gap-md);
     padding: var(--gap-sm) var(--gap-md);
-    background: rgba(255, 82, 82, 0.08);
-    border: 1px solid rgba(255, 82, 82, 0.15);
+    background: rgba(255, 82, 82, 0.1);
+    border: 1px solid rgba(255, 82, 82, 0.25);
     border-radius: var(--radius-sm);
-    font-size: 11px; color: var(--error);
-    display: flex; align-items: center;
-    justify-content: space-between; gap: var(--gap-sm);
+    font-size: 11px;
+    color: var(--error);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--gap-sm);
+  }
+  .error-msg {
+    flex: 1;
   }
 
   /* Confirm modal */
   .confirm-overlay {
-    position: fixed; inset: 0;
-    background: rgba(0,0,0,0.5);
-    display: flex; align-items: center; justify-content: center;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
     z-index: 1000;
   }
   .confirm-modal {
@@ -383,8 +496,13 @@
     min-width: 280px;
     box-shadow: var(--shadow-lg);
   }
-  .confirm-modal p { font-size: 13px; margin-bottom: var(--gap-md); }
+  .confirm-modal p {
+    font-size: 13px;
+    margin-bottom: var(--gap-md);
+  }
   .confirm-actions {
-    display: flex; gap: var(--gap-sm); justify-content: flex-end;
+    display: flex;
+    gap: var(--gap-sm);
+    justify-content: flex-end;
   }
 </style>

@@ -27,8 +27,10 @@ export interface KeyEntry {
   key_type: string;
 }
 
+export type SearchMode = 'contains' | 'prefix' | 'exact';
+
 export interface ScanResult {
-  cursor: number;
+  cursor: string;
   keys: KeyEntry[];
 }
 

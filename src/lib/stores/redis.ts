@@ -8,6 +8,7 @@ import type {
   ScanResult,
   KeyDetail,
   SavedConnection,
+  SearchMode,
 } from '$lib/types';
 
 // Connection state
@@ -18,12 +19,12 @@ export const serverInfo = writable<ServerInfo | null>(null);
 
 // Keys state
 export const keys = writable<KeyEntry[]>([]);
-export const scanCursor = writable(0);
+export const scanCursor = writable<string>('0');
 export const hasMore = writable(true);
 export const isLoading = writable(false);
 export const isSearching = writable(false);
 export const searchPattern = writable('*');
-export const searchMode = writable<'exact' | 'like'>('exact');
+export const searchMode = writable<SearchMode>('contains');
 export const selectedKey = writable<string | null>(null);
 export const selectedKeys = writable<Set<string>>(new Set());
 export const keyDetail = writable<KeyDetail | null>(null);
@@ -46,7 +47,6 @@ function loadSavedConnections(): SavedConnection[] {
 
 export function saveConnection(conn: SavedConnection) {
   savedConnections.update((list) => {
-    // Deduplicate by URL (not ID) to avoid duplicates when clicking saved + connecting
     const idx = list.findIndex((c) => c.url === conn.url);
     if (idx >= 0) {
       list[idx] = { ...list[idx], name: conn.name, password: conn.password };
@@ -63,7 +63,6 @@ export function removeConnection(id: string) {
     const removed = list.find((c) => c.id === id);
     const filtered = list.filter((c) => c.id !== id);
     localStorage.setItem('redis-manager-connections', JSON.stringify(filtered));
-    // Remove from active-names list if present
     if (removed) {
       try {
         const activeNames: string[] = JSON.parse(localStorage.getItem('redis-manager-active-names') || '[]');
@@ -82,7 +81,6 @@ function generateId() {
 // Actions
 export async function connectRedis(url: string, password?: string, name?: string) {
   try {
-    // Prevent duplicate connections to the same URL
     let tabs: ConnectionTab[] = [];
     const unsubTabs = connectionTabs.subscribe((v) => (tabs = v));
     unsubTabs();
@@ -133,10 +131,7 @@ export async function connectRedis(url: string, password?: string, name?: string
 }
 
 function saveActiveConnections() {
-  // Read saved connections and mark which ones are currently active
   try {
-    const saved = JSON.parse(localStorage.getItem('redis-manager-connections') || '[]');
-    // Get current active connection tabs
     let tabs: ConnectionTab[] = [];
     const unsub = connectionTabs.subscribe((v) => (tabs = v));
     unsub();
@@ -182,7 +177,6 @@ export async function disconnectRedis(id?: string) {
     await refreshConnectionTabs();
     saveActiveConnections();
 
-    // Check if there are remaining connections
     let tabs: ConnectionTab[] = [];
     const unsub = connectionTabs.subscribe((v) => (tabs = v));
     unsub();
@@ -192,7 +186,7 @@ export async function disconnectRedis(id?: string) {
       activeConnectionId.set(null);
       serverInfo.set(null);
       keys.set([]);
-      scanCursor.set(0);
+      scanCursor.set('0');
       hasMore.set(true);
       selectedKey.set(null);
       selectedKeys.set(new Set());
@@ -200,7 +194,6 @@ export async function disconnectRedis(id?: string) {
       error.set(null);
       localStorage.removeItem('redis-manager-active-names');
     } else {
-      // Switch to first available tab
       const newActive = tabs.find((t) => t.is_active) || tabs[0];
       await switchConnection(newActive.id);
     }
@@ -214,9 +207,8 @@ export async function switchConnection(id: string) {
     isLoading.set(true);
     error.set(null);
 
-    // Clear current data immediately to show loading state
     keys.set([]);
-    scanCursor.set(0);
+    scanCursor.set('0');
     hasMore.set(true);
     selectedKey.set(null);
     keyDetail.set(null);
@@ -227,7 +219,6 @@ export async function switchConnection(id: string) {
     activeConnectionId.set(id);
     await refreshConnectionTabs();
 
-    // Reload server info and keys for this connection
     try {
       const sInfo = await invoke<ServerInfo>('get_server_info');
       serverInfo.set(sInfo);
@@ -273,7 +264,7 @@ export async function loadKeys(pattern?: string, reset = false) {
     isLoading.set(true);
     error.set(null);
 
-    let currentCursor = 0;
+    let currentCursor = '0';
     if (!reset) {
       const unsub = scanCursor.subscribe((v) => (currentCursor = v));
       unsub();
@@ -304,7 +295,7 @@ export async function loadKeys(pattern?: string, reset = false) {
     }
 
     scanCursor.set(result.cursor);
-    hasMore.set(result.cursor !== 0);
+    hasMore.set(result.cursor !== '0');
   } catch (e: any) {
     error.set(e.toString());
   } finally {
@@ -312,59 +303,53 @@ export async function loadKeys(pattern?: string, reset = false) {
   }
 }
 
-export async function searchKeys(pattern: string, mode: 'exact' | 'like') {
+export async function searchKeys(pattern: string, mode: SearchMode) {
   try {
     isSearching.set(true);
     isLoading.set(true);
     error.set(null);
 
-    // Build the search pattern based on mode
+    const trimmed = pattern.trim();
     let searchPat: string;
-    if (!pattern.trim()) {
+
+    if (!trimmed) {
       searchPat = '*';
+    } else if (trimmed.includes('*') || trimmed.includes('?')) {
+      searchPat = trimmed;
     } else if (mode === 'exact') {
-      // Exact: use pattern as-is (user provides exact key name)
-      searchPat = pattern.trim();
+      searchPat = trimmed;
+    } else if (mode === 'prefix') {
+      searchPat = `${trimmed}*`;
     } else {
-      // Like: auto-wrap with wildcards if user didn't add them
-      const trimmed = pattern.trim();
-      if (trimmed.includes('*')) {
-        searchPat = trimmed; // User already has wildcards
-      } else {
-        searchPat = `*${trimmed}*`; // Wrap with wildcards for substring match
-      }
+      // Contains
+      searchPat = `*${trimmed}*`;
     }
 
     searchPattern.set(searchPat);
     searchMode.set(mode);
 
-    if (mode === 'exact' && !pattern.includes('*')) {
-      // For exact mode without wildcards, try to get the key directly
+    // If exact mode without wildcards, attempt direct lookup first for instant result
+    if (mode === 'exact' && !trimmed.includes('*') && !trimmed.includes('?')) {
       try {
-        const detail = await invoke<any>('get_key_detail', { key: pattern.trim() });
-        // Key exists — show it in the list
+        const detail = await invoke<KeyDetail>('get_key_detail', { key: trimmed });
         keys.set([{ name: detail.key, key_type: detail.key_type }]);
-        scanCursor.set(0);
+        scanCursor.set('0');
         hasMore.set(false);
         return;
       } catch {
-        // Key doesn't exist, fall through to scan
-        keys.set([]);
-        scanCursor.set(0);
-        hasMore.set(false);
-        return;
+        // Direct key lookup did not find it; fall through to server scan!
       }
     }
 
-    // Like mode or exact with wildcards: full scan
+    // Full scan across cluster/standalone
     const result = await invoke<ScanResult>('search_keys', {
       pattern: searchPat,
-      maxResults: 500,
+      maxResults: 1000,
     });
 
     keys.set(result.keys);
-    scanCursor.set(0);
-    hasMore.set(false); // Full scan is complete
+    scanCursor.set('0');
+    hasMore.set(false);
   } catch (e: any) {
     error.set(e.toString());
   } finally {
@@ -387,6 +372,19 @@ export async function loadKeyDetail(key: string) {
   }
 }
 
+export async function createKey(key: string, keyType: string, value: string, ttl?: number) {
+  try {
+    error.set(null);
+    await invoke('create_key', { key, keyType, value, ttl: ttl ?? null });
+    // Reload keys and select newly created key
+    await loadKeys('*', true);
+    await loadKeyDetail(key);
+  } catch (e: any) {
+    error.set(e.toString());
+    throw e;
+  }
+}
+
 export async function deleteSelectedKeys(keysToDelete: string[]) {
   try {
     error.set(null);
@@ -405,6 +403,49 @@ export async function deleteSelectedKeys(keysToDelete: string[]) {
   } catch (e: any) {
     error.set(e.toString());
   }
+}
+
+export function selectAllKeys() {
+  let list: KeyEntry[] = [];
+  const unsub = keys.subscribe((v) => (list = v));
+  unsub();
+  selectedKeys.set(new Set(list.map((k) => k.name)));
+}
+
+export function deselectAllKeys() {
+  selectedKeys.set(new Set());
+}
+
+export function invertSelection() {
+  let list: KeyEntry[] = [];
+  const unsub = keys.subscribe((v) => (list = v));
+  unsub();
+
+  selectedKeys.update((curr) => {
+    const next = new Set<string>();
+    for (const k of list) {
+      if (!curr.has(k.name)) {
+        next.add(k.name);
+      }
+    }
+    return next;
+  });
+}
+
+export function selectKeys(names: string[]) {
+  selectedKeys.update((curr) => {
+    const next = new Set(curr);
+    for (const n of names) next.add(n);
+    return next;
+  });
+}
+
+export function deselectKeys(names: string[]) {
+  selectedKeys.update((curr) => {
+    const next = new Set(curr);
+    for (const n of names) next.delete(n);
+    return next;
+  });
 }
 
 export async function updateKeyValue(key: string, value: string, ttl?: number) {

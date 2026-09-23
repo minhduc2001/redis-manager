@@ -1,6 +1,27 @@
 # Changelog
 
-## v0.1.3
+## v0.1.5
+
+### Features & Improvements
+- **Hỗ trợ Redis Cluster hoàn chỉnh**:
+  - Tự động phát hiện và quét đa Master Nodes qua `CLUSTER NODES`, giải quyết triệt để vấn đề tìm kiếm bị sót key do phân vùng slot hash.
+  - Tăng tốc truy vấn loại dữ liệu (`TYPE`) gấp 10x-50x bằng Redis Pipelining.
+  - Hiển thị chính xác tổng số keys toàn cụm cluster qua `DBSIZE` và tổng dung lượng RAM tiêu thụ.
+- **Nâng cấp Bộ tìm kiếm (Search Bar)**:
+  - Bổ sung 3 chế độ tìm kiếm: **Contains** (mặc định), **Prefix**, **Exact**.
+  - Tự động nhận diện wildcard `*` và `?`.
+  - Khắc phục lỗi trả về rỗng khi không tìm thấy exact key.
+- **Bộ công cụ Select All & Batch Actions**:
+  - Master checkbox 3 trạng thái (Unchecked, Indeterminate `—`, Checked `✓`).
+  - Checkbox chọn theo từng thư mục (Folder) trong Tree View.
+  - Thanh thao tác hàng loạt: chọn All, None, Invert, **Copy Key Names** vào clipboard, và xóa hàng loạt với modal xác nhận.
+  - Phím tắt `Ctrl+A` / `Cmd+A` để chọn toàn bộ key nhanh.
+- **Tạo Key Mới (+ New Key)**:
+  - Modal tạo nhanh key trực tiếp cho các kiểu dữ liệu: String, Hash, List, Set, ZSet với TTL tùy chọn.
+- **Giao diện người dùng hiện đại (Modern Dark UI)**:
+  - Thiết kế lại theme với phong cách neon dark tương phản cao, badge dữ liệu phát sáng, thanh trạng thái máy chủ rõ ràng.
+
+## v0.1.4
 
 ### Features
 - **Auto-Update**: Tích hợp `tauri-plugin-updater` giúp ứng dụng tự động kiểm tra và cập nhật khi có bản mới. Hiển thị thanh tiến trình tải xuống trực quan.

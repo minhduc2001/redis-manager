@@ -34,6 +34,7 @@ pub fn run() {
             delete_hash_field,
             add_list_item,
             add_set_member,
+            create_key,
             execute_command,
         ])
         .run(tauri::generate_context!())

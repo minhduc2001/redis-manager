@@ -14,3 +14,5 @@ vite.config.ts.timestamp-*
 *.exe
 *.nsis
 src-tauri/target/
+*.key
+*.key.pub

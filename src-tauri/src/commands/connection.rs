@@ -1,6 +1,6 @@
 use serde::Serialize;
 use tauri::State;
-use crate::redis_client::{RedisState, test_redis_connection, RedisConnection};
+use crate::redis_client::{RedisState, test_redis_connection};
 
 #[derive(Serialize)]
 pub struct ConnectionInfo {
@@ -87,46 +87,80 @@ pub async fn test_connection(
 
 #[tauri::command]
 pub async fn get_server_info(state: State<'_, RedisState>) -> Result<ServerInfo, String> {
-    let conn = state.get_active_connection().await?;
+    let entry = state.get_active_entry().await?;
+    let master_conns = state.get_master_connections().await?;
 
-    let info_str: String = match conn {
-        RedisConnection::Standalone(mut con) => {
-            redis::cmd("INFO").query_async(&mut con).await.map_err(|e| e.to_string())?
+    let mut total_keys_count: u64 = 0;
+    let mut total_used_memory_bytes: u64 = 0;
+    let mut total_clients: u64 = 0;
+    let mut first_info_str = String::new();
+
+    for (_addr, mut con) in master_conns {
+        // Query DBSIZE for accurate key count on this master
+        let dbsize: Result<u64, _> = redis::cmd("DBSIZE").query_async(&mut con).await;
+        if let Ok(count) = dbsize {
+            total_keys_count += count;
         }
-        RedisConnection::Cluster(mut con) => {
-            redis::cmd("INFO").query_async(&mut con).await.map_err(|e| e.to_string())?
+
+        // Query INFO
+        let info_str: Result<String, _> = redis::cmd("INFO").query_async(&mut con).await;
+        if let Ok(info) = info_str {
+            if first_info_str.is_empty() {
+                first_info_str = info.clone();
+            }
+
+            for line in info.lines() {
+                if line.starts_with("used_memory:") {
+                    if let Ok(bytes) = line.split(':').nth(1).unwrap_or("0").trim().parse::<u64>() {
+                        total_used_memory_bytes += bytes;
+                    }
+                } else if line.starts_with("connected_clients:") {
+                    if let Ok(clients) = line.split(':').nth(1).unwrap_or("0").trim().parse::<u64>() {
+                        total_clients += clients;
+                    }
+                }
+            }
         }
-    };
+    }
 
     let get_field = |field: &str| -> String {
-        info_str
+        first_info_str
             .lines()
             .find(|line| line.starts_with(field))
             .map(|line| line.split(':').nth(1).unwrap_or("").trim().to_string())
             .unwrap_or_else(|| "N/A".to_string())
     };
 
-    let db_keys: String = info_str
-        .lines()
-        .filter(|line| line.starts_with("db"))
-        .map(|line| {
-            let keys_part = line.split(':').nth(1).unwrap_or("");
-            keys_part
-                .split(',')
-                .find(|p| p.starts_with("keys="))
-                .and_then(|p| p.strip_prefix("keys="))
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(0)
-        })
-        .sum::<u64>()
-        .to_string();
+    let human_mem = if total_used_memory_bytes > 0 {
+        format_bytes_human(total_used_memory_bytes)
+    } else {
+        get_field("used_memory_human")
+    };
+
+    let clients_str = if total_clients > 0 {
+        total_clients.to_string()
+    } else {
+        get_field("connected_clients")
+    };
 
     Ok(ServerInfo {
         version: get_field("redis_version"),
-        mode: get_field("redis_mode"),
-        connected_clients: get_field("connected_clients"),
-        used_memory_human: get_field("used_memory_human"),
-        total_keys: db_keys,
+        mode: entry.mode.clone(),
+        connected_clients: clients_str,
+        used_memory_human: human_mem,
+        total_keys: total_keys_count.to_string(),
         uptime_in_seconds: get_field("uptime_in_seconds"),
     })
+}
+
+fn format_bytes_human(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.2} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.2} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{} B", bytes)
+    }
 }
