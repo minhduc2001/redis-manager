@@ -28,11 +28,17 @@
 
   // Flat pagination
   let currentPage = 0;
-  const PAGE_SIZE = 50;
+  const PAGE_SIZE = 250;
 
   // Folder pagination
-  const FOLDER_LIMIT = 50;
+  const FOLDER_LIMIT = 250;
   let folderLimits: Map<string, number> = new Map();
+
+  let prevPattern = $searchPattern;
+  $: if ($searchPattern !== prevPattern) {
+    prevPattern = $searchPattern;
+    currentPage = 0;
+  }
 
   function getFolderLimit(path: string): number {
     return folderLimits.get(path) || FOLDER_LIMIT;
@@ -165,8 +171,9 @@
     showDeleteConfirm = false;
   }
 
-  function loadMore() {
-    loadKeys();
+  async function loadMore() {
+    await loadKeys();
+    currentPage = Math.max(currentPage, Math.floor(($keys.length - 1) / PAGE_SIZE));
   }
 
   function showMore() {
@@ -443,10 +450,10 @@
       {/if}
     {/if}
 
-    {#if $hasMore && !$isSearching}
+    {#if $hasMore}
       <div class="load-more">
-        <button class="btn btn-sm btn-primary" style="display: inline-flex; align-items: center; gap: 6px;" on:click={loadMore} disabled={$isLoading}>
-          {#if $isLoading}
+        <button class="btn btn-sm btn-primary" style="display: inline-flex; align-items: center; gap: 6px;" on:click={loadMore} disabled={$isLoading || $isSearching}>
+          {#if $isLoading || $isSearching}
             <span class="animate-spin" style="display: flex;"><Icons name="refresh" size={13} /></span>
             <span>Scanning...</span>
           {:else}
@@ -471,8 +478,8 @@
     {#if viewMode === 'flat'}
       <span class="text-muted">• Showing {displayedCount}</span>
     {/if}
-    {#if $hasMore && $searchPattern === '*'}
-      <span class="text-accent">• More available</span>
+    {#if $hasMore}
+      <span class="text-accent">• More available in Redis</span>
     {/if}
   </div>
 

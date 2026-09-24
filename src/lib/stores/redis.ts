@@ -312,7 +312,7 @@ export async function loadKeys(pattern?: string, reset = false) {
     const result = await tauriInvoke<ScanResult>('scan_keys', {
       pattern: currentPattern,
       cursor: currentCursor,
-      count: 200,
+      count: 1000,
     });
 
     if (reset) {
@@ -372,15 +372,16 @@ export async function searchKeys(pattern: string, mode: SearchMode) {
       }
     }
 
-    // Full scan across cluster/standalone
-    const result = await tauriInvoke<ScanResult>('search_keys', {
+    // Start scan from cursor '0' with target count 1000
+    const result = await tauriInvoke<ScanResult>('scan_keys', {
       pattern: searchPat,
-      maxResults: 1000,
+      cursor: '0',
+      count: 1000,
     });
 
     keys.set(result.keys);
-    scanCursor.set('0');
-    hasMore.set(false);
+    scanCursor.set(result.cursor);
+    hasMore.set(result.cursor !== '0');
   } catch (e: any) {
     error.set(e.toString());
   } finally {
