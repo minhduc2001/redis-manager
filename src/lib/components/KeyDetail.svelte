@@ -17,7 +17,130 @@
     deleteSelectedKeys,
     loadKeyDetail,
   } from '$lib/stores/redis';
+  import type { HashField, ZSetMember } from '$lib/types';
   import Icons from './Icons.svelte';
+
+  // Result search state
+  let resultSearchQuery = '';
+  let resultSearchInputEl: HTMLInputElement | null = null;
+
+  function escapeHtml(str: string): string {
+    return (str || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function highlightText(text: string, query: string): string {
+    if (!query || !text) return escapeHtml(text || '');
+    const escapedText = escapeHtml(text);
+    const trimmed = query.trim();
+    if (!trimmed) return escapedText;
+    const escapedQuery = escapeHtml(trimmed);
+    const regex = new RegExp(`(${escapedQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+    return escapedText.replace(regex, '<mark class="search-match">$1</mark>');
+  }
+
+  function highlightInsideHtml(html: string, query: string): string {
+    if (!query || !html) return html || '';
+    const trimmed = query.trim();
+    if (!trimmed) return html;
+    const escapedQuery = escapeHtml(trimmed);
+    const regex = new RegExp(`(?![^<]*>)(${escapedQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+    return html.replace(regex, '<mark class="search-match">$1</mark>');
+  }
+
+  function countMatches(text: string, query: string): number {
+    if (!query || !text) return 0;
+    const trimmed = query.trim();
+    if (!trimmed) return 0;
+    const regex = new RegExp(trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    const matches = text.match(regex);
+    return matches ? matches.length : 0;
+  }
+
+  function getSearchPlaceholder(type: string): string {
+    switch (type) {
+      case 'Hash':
+        return 'Filter fields & values (Ctrl+F)...';
+      case 'List':
+        return 'Filter list items (Ctrl+F)...';
+      case 'Set':
+        return 'Filter set members (Ctrl+F)...';
+      case 'ZSet':
+        return 'Filter members & scores (Ctrl+F)...';
+      case 'String':
+        return 'Search in text / JSON (Ctrl+F)...';
+      default:
+        return 'Filter in result (Ctrl+F)...';
+    }
+  }
+
+  function handleSearchKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      resultSearchQuery = '';
+      resultSearchInputEl?.blur();
+    }
+  }
+
+  function handleWindowKeydown(e: KeyboardEvent) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+      if (resultSearchInputEl) {
+        e.preventDefault();
+        resultSearchInputEl.focus();
+        resultSearchInputEl.select();
+      }
+    }
+  }
+
+  // Reset search when key changes
+  $: if ($selectedKey) {
+    resultSearchQuery = '';
+  }
+
+  // Filtered collections
+  $: filteredHashData = ($keyDetail?.value.type === 'Hash' && Array.isArray($keyDetail.value.data))
+    ? (resultSearchQuery.trim()
+        ? ($keyDetail.value.data as HashField[]).filter((item) =>
+            item.field.toLowerCase().includes(resultSearchQuery.trim().toLowerCase()) ||
+            item.value.toLowerCase().includes(resultSearchQuery.trim().toLowerCase())
+          )
+        : ($keyDetail.value.data as HashField[]))
+    : [];
+
+  $: filteredListData = ($keyDetail?.value.type === 'List' && Array.isArray($keyDetail.value.data))
+    ? ($keyDetail.value.data as string[])
+        .map((item, originalIndex) => ({ item, originalIndex }))
+        .filter(({ item }) =>
+          resultSearchQuery.trim()
+            ? item.toLowerCase().includes(resultSearchQuery.trim().toLowerCase())
+            : true
+        )
+    : [];
+
+  $: filteredSetData = ($keyDetail?.value.type === 'Set' && Array.isArray($keyDetail.value.data))
+    ? ($keyDetail.value.data as string[])
+        .map((item, originalIndex) => ({ item, originalIndex }))
+        .filter(({ item }) =>
+          resultSearchQuery.trim()
+            ? item.toLowerCase().includes(resultSearchQuery.trim().toLowerCase())
+            : true
+        )
+    : [];
+
+  $: filteredZSetData = ($keyDetail?.value.type === 'ZSet' && Array.isArray($keyDetail.value.data))
+    ? (resultSearchQuery.trim()
+        ? ($keyDetail.value.data as ZSetMember[]).filter((item) =>
+            item.member.toLowerCase().includes(resultSearchQuery.trim().toLowerCase()) ||
+            String(item.score).toLowerCase().includes(resultSearchQuery.trim().toLowerCase())
+          )
+        : ($keyDetail.value.data as ZSetMember[]))
+    : [];
+
+  $: stringMatchCount = ($keyDetail?.value.type === 'String' && resultSearchQuery.trim())
+    ? countMatches($keyDetail.value.data, resultSearchQuery)
+    : 0;
 
   let editing = false;
   let editValue = '';
@@ -238,6 +361,8 @@
   }
 </script>
 
+<svelte:window on:keydown={handleWindowKeydown} />
+
 <div class="key-detail">
   {#if $isLoadingDetail}
     <div class="loading-state">
@@ -322,6 +447,62 @@
 
       <!-- Value Display -->
       <div class="value-section">
+        <!-- Result Search Bar -->
+        {#if !editing}
+          <div class="result-search-bar animate-fade">
+            <div class="result-search-input-wrap">
+              <span class="result-search-icon">
+                <Icons name="search" size={13} />
+              </span>
+              <input
+                type="text"
+                class="input input-sm result-search-input"
+                bind:this={resultSearchInputEl}
+                bind:value={resultSearchQuery}
+                placeholder={getSearchPlaceholder($keyDetail.value.type)}
+                on:keydown={handleSearchKeydown}
+                spellcheck="false"
+              />
+              {#if resultSearchQuery}
+                <button
+                  type="button"
+                  class="btn btn-sm btn-icon clear-search-btn"
+                  on:click={() => { resultSearchQuery = ''; resultSearchInputEl?.focus(); }}
+                  title="Clear search (Esc)"
+                >
+                  <Icons name="close" size={12} />
+                </button>
+              {/if}
+            </div>
+
+            {#if resultSearchQuery.trim()}
+              <div class="search-match-badge animate-fade">
+                {#if $keyDetail.value.type === 'Hash'}
+                  <span class:no-match={filteredHashData.length === 0}>
+                    {filteredHashData.length} / {($keyDetail.value.data as HashField[]).length} fields
+                  </span>
+                {:else if $keyDetail.value.type === 'List'}
+                  <span class:no-match={filteredListData.length === 0}>
+                    {filteredListData.length} / {($keyDetail.value.data as string[]).length} items
+                  </span>
+                {:else if $keyDetail.value.type === 'Set'}
+                  <span class:no-match={filteredSetData.length === 0}>
+                    {filteredSetData.length} / {($keyDetail.value.data as string[]).length} members
+                  </span>
+                {:else if $keyDetail.value.type === 'ZSet'}
+                  <span class:no-match={filteredZSetData.length === 0}>
+                    {filteredZSetData.length} / {($keyDetail.value.data as ZSetMember[]).length} members
+                  </span>
+                {:else if $keyDetail.value.type === 'String'}
+                  <span class:no-match={stringMatchCount === 0}>
+                    {stringMatchCount} {stringMatchCount === 1 ? 'match' : 'matches'}
+                  </span>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/if}
+
         {#if $keyDetail.value.type === 'String'}
           <div class="value-header">
             <span class="text-muted">Value</span>
@@ -350,17 +531,19 @@
               </button>
             </div>
             {#if jsonFormatted}
-              <pre class="value-display mono json-display">{@html jsonResult.highlighted}</pre>
+              <pre class="value-display mono json-display">{@html resultSearchQuery.trim() ? highlightInsideHtml(jsonResult.highlighted, resultSearchQuery) : jsonResult.highlighted}</pre>
             {:else}
-              <pre class="value-display mono">{$keyDetail.value.data}</pre>
+              <pre class="value-display mono">{@html resultSearchQuery.trim() ? highlightText($keyDetail.value.data, resultSearchQuery) : escapeHtml($keyDetail.value.data)}</pre>
             {/if}
           {:else}
-            <pre class="value-display mono">{$keyDetail.value.data}</pre>
+            <pre class="value-display mono">{@html resultSearchQuery.trim() ? highlightText($keyDetail.value.data, resultSearchQuery) : escapeHtml($keyDetail.value.data)}</pre>
           {/if}
 
         {:else if $keyDetail.value.type === 'Hash'}
           <div class="value-header">
-            <span class="text-muted">Hash Fields ({$keyDetail.size})</span>
+            <span class="text-muted">
+              Hash Fields ({filteredHashData.length}{#if resultSearchQuery.trim() && filteredHashData.length !== $keyDetail.size} of {$keyDetail.size}{/if})
+            </span>
           </div>
           <div class="table-container">
             <table>
@@ -372,43 +555,66 @@
                 </tr>
               </thead>
               <tbody>
-                {#each $keyDetail.value.data as item}
+                {#if filteredHashData.length === 0}
                   <tr>
-                    <td class="mono">{item.field}</td>
-                    <td class="mono">
-                      {#if editingHashField === item.field}
-                        <input class="input input-mono" bind:value={editingHashValue} on:keydown={(e) => e.key === 'Enter' && saveHashFieldEdit()} />
-                      {:else}
-                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px;">
-                          <span class="cell-value" title={item.value}>{item.value}</span>
-                          <button class="btn btn-sm btn-icon copy-btn" on:click={() => copyText(item.value, `hf_${item.field}`)} title="Copy field value">
-                            {#if copyStatus[`hf_${item.field}`]}
-                              <Icons name="check" size={12} />
-                            {:else}
-                              <Icons name="copy" size={12} />
-                            {/if}
-                          </button>
-                        </div>
-                      {/if}
-                    </td>
-                    <td>
-                      {#if editingHashField === item.field}
-                        <button class="btn btn-sm btn-primary" on:click={saveHashFieldEdit}>
-                          <Icons name="check" size={12} />
-                        </button>
-                      {:else}
-                        <div style="display: flex; gap: 4px;">
-                          <button class="btn btn-sm btn-icon" on:click={() => startEditHashField(item.field, item.value)} title="Edit field">
-                            <Icons name="edit" size={12} />
-                          </button>
-                          <button class="btn btn-sm btn-icon btn-danger" on:click={() => handleDeleteHashField(item.field)} title="Delete field">
-                            <Icons name="trash" size={12} />
-                          </button>
-                        </div>
-                      {/if}
+                    <td colspan="3" class="no-matches-cell">
+                      <div class="no-matches-content">
+                        <span>No fields matching "<strong>{resultSearchQuery}</strong>"</span>
+                        <button class="btn btn-sm" on:click={() => resultSearchQuery = ''}>Clear filter</button>
+                      </div>
                     </td>
                   </tr>
-                {/each}
+                {:else}
+                  {#each filteredHashData as item}
+                    <tr>
+                      <td class="mono">
+                        {#if resultSearchQuery.trim()}
+                          {@html highlightText(item.field, resultSearchQuery)}
+                        {:else}
+                          {item.field}
+                        {/if}
+                      </td>
+                      <td class="mono">
+                        {#if editingHashField === item.field}
+                          <input class="input input-mono" bind:value={editingHashValue} on:keydown={(e) => e.key === 'Enter' && saveHashFieldEdit()} />
+                        {:else}
+                          <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px;">
+                            <span class="cell-value" title={item.value}>
+                              {#if resultSearchQuery.trim()}
+                                {@html highlightText(item.value, resultSearchQuery)}
+                              {:else}
+                                {item.value}
+                              {/if}
+                            </span>
+                            <button class="btn btn-sm btn-icon copy-btn" on:click={() => copyText(item.value, `hf_${item.field}`)} title="Copy field value">
+                              {#if copyStatus[`hf_${item.field}`]}
+                                <Icons name="check" size={12} />
+                              {:else}
+                                <Icons name="copy" size={12} />
+                              {/if}
+                            </button>
+                          </div>
+                        {/if}
+                      </td>
+                      <td>
+                        {#if editingHashField === item.field}
+                          <button class="btn btn-sm btn-primary" on:click={saveHashFieldEdit}>
+                            <Icons name="check" size={12} />
+                          </button>
+                        {:else}
+                          <div style="display: flex; gap: 4px;">
+                            <button class="btn btn-sm btn-icon" on:click={() => startEditHashField(item.field, item.value)} title="Edit field">
+                              <Icons name="edit" size={12} />
+                            </button>
+                            <button class="btn btn-sm btn-icon btn-danger" on:click={() => handleDeleteHashField(item.field)} title="Delete field">
+                              <Icons name="trash" size={12} />
+                            </button>
+                          </div>
+                        {/if}
+                      </td>
+                    </tr>
+                  {/each}
+                {/if}
               </tbody>
             </table>
           </div>
@@ -423,28 +629,43 @@
 
         {:else if $keyDetail.value.type === 'List'}
           <div class="value-header">
-            <span class="text-muted">List Items ({$keyDetail.size})</span>
+            <span class="text-muted">
+              List Items ({filteredListData.length}{#if resultSearchQuery.trim() && filteredListData.length !== $keyDetail.size} of {$keyDetail.size}{/if})
+            </span>
           </div>
-          <div class="list-items">
-            {#each $keyDetail.value.data as item, i}
-              <div class="list-item">
-                <span class="item-index">{i}</span>
-                <span class="mono truncate cell-item-text" title={item}>{item}</span>
-                <div class="item-actions">
-                  <button class="btn btn-sm btn-icon copy-btn" on:click={() => copyText(item, `li_${i}`)} title="Copy item value">
-                    {#if copyStatus[`li_${i}`]}
-                      <Icons name="check" size={12} />
+          {#if filteredListData.length === 0}
+            <div class="no-matches-box">
+              <span>No items matching "<strong>{resultSearchQuery}</strong>"</span>
+              <button class="btn btn-sm" on:click={() => resultSearchQuery = ''}>Clear filter</button>
+            </div>
+          {:else}
+            <div class="list-items">
+              {#each filteredListData as { item, originalIndex }}
+                <div class="list-item">
+                  <span class="item-index">{originalIndex}</span>
+                  <span class="mono truncate cell-item-text" title={item}>
+                    {#if resultSearchQuery.trim()}
+                      {@html highlightText(item, resultSearchQuery)}
                     {:else}
-                      <Icons name="copy" size={12} />
+                      {item}
                     {/if}
-                  </button>
-                  <button class="btn btn-sm btn-icon btn-danger" on:click={() => handleDeleteListItem(item)} title="Delete item from list">
-                    <Icons name="trash" size={12} />
-                  </button>
+                  </span>
+                  <div class="item-actions">
+                    <button class="btn btn-sm btn-icon copy-btn" on:click={() => copyText(item, `li_${originalIndex}`)} title="Copy item value">
+                      {#if copyStatus[`li_${originalIndex}`]}
+                        <Icons name="check" size={12} />
+                      {:else}
+                        <Icons name="copy" size={12} />
+                      {/if}
+                    </button>
+                    <button class="btn btn-sm btn-icon btn-danger" on:click={() => handleDeleteListItem(item)} title="Delete item from list">
+                      <Icons name="trash" size={12} />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            {/each}
-          </div>
+              {/each}
+            </div>
+          {/if}
           <div class="add-row">
             <input class="input input-mono" bind:value={newListItem} placeholder="New item value" on:keydown={(e) => e.key === 'Enter' && handleAddListItem()} />
             <button class="btn btn-sm btn-primary" style="display: inline-flex; align-items: center; gap: 4px;" on:click={handleAddListItem}>
@@ -455,27 +676,42 @@
 
         {:else if $keyDetail.value.type === 'Set'}
           <div class="value-header">
-            <span class="text-muted">Set Members ({$keyDetail.size})</span>
+            <span class="text-muted">
+              Set Members ({filteredSetData.length}{#if resultSearchQuery.trim() && filteredSetData.length !== $keyDetail.size} of {$keyDetail.size}{/if})
+            </span>
           </div>
-          <div class="list-items">
-            {#each $keyDetail.value.data as item, i}
-              <div class="list-item">
-                <span class="mono truncate cell-item-text" title={item}>{item}</span>
-                <div class="item-actions">
-                  <button class="btn btn-sm btn-icon copy-btn" on:click={() => copyText(item, `set_${i}`)} title="Copy member value">
-                    {#if copyStatus[`set_${i}`]}
-                      <Icons name="check" size={12} />
+          {#if filteredSetData.length === 0}
+            <div class="no-matches-box">
+              <span>No members matching "<strong>{resultSearchQuery}</strong>"</span>
+              <button class="btn btn-sm" on:click={() => resultSearchQuery = ''}>Clear filter</button>
+            </div>
+          {:else}
+            <div class="list-items">
+              {#each filteredSetData as { item, originalIndex }}
+                <div class="list-item">
+                  <span class="mono truncate cell-item-text" title={item}>
+                    {#if resultSearchQuery.trim()}
+                      {@html highlightText(item, resultSearchQuery)}
                     {:else}
-                      <Icons name="copy" size={12} />
+                      {item}
                     {/if}
-                  </button>
-                  <button class="btn btn-sm btn-icon btn-danger" on:click={() => handleDeleteSetMember(item)} title="Delete member from set">
-                    <Icons name="trash" size={12} />
-                  </button>
+                  </span>
+                  <div class="item-actions">
+                    <button class="btn btn-sm btn-icon copy-btn" on:click={() => copyText(item, `set_${originalIndex}`)} title="Copy member value">
+                      {#if copyStatus[`set_${originalIndex}`]}
+                        <Icons name="check" size={12} />
+                      {:else}
+                        <Icons name="copy" size={12} />
+                      {/if}
+                    </button>
+                    <button class="btn btn-sm btn-icon btn-danger" on:click={() => handleDeleteSetMember(item)} title="Delete member from set">
+                      <Icons name="trash" size={12} />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            {/each}
-          </div>
+              {/each}
+            </div>
+          {/if}
           <div class="add-row">
             <input class="input input-mono" bind:value={newSetMember} placeholder="New member" on:keydown={(e) => e.key === 'Enter' && handleAddSetMember()} />
             <button class="btn btn-sm btn-primary" style="display: inline-flex; align-items: center; gap: 4px;" on:click={handleAddSetMember}>
@@ -486,7 +722,9 @@
 
         {:else if $keyDetail.value.type === 'ZSet'}
           <div class="value-header">
-            <span class="text-muted">Sorted Set ({$keyDetail.size})</span>
+            <span class="text-muted">
+              Sorted Set ({filteredZSetData.length}{#if resultSearchQuery.trim() && filteredZSetData.length !== $keyDetail.size} of {$keyDetail.size}{/if})
+            </span>
           </div>
           <div class="table-container">
             <table>
@@ -498,26 +736,49 @@
                 </tr>
               </thead>
               <tbody>
-                {#each $keyDetail.value.data as item, i}
+                {#if filteredZSetData.length === 0}
                   <tr>
-                    <td class="mono text-accent">{item.score}</td>
-                    <td class="mono">{item.member}</td>
-                    <td>
-                      <div style="display: flex; gap: 4px;">
-                        <button class="btn btn-sm btn-icon copy-btn" on:click={() => copyText(item.member, `zset_${i}`)} title="Copy member">
-                          {#if copyStatus[`zset_${i}`]}
-                            <Icons name="check" size={12} />
-                          {:else}
-                            <Icons name="copy" size={12} />
-                          {/if}
-                        </button>
-                        <button class="btn btn-sm btn-icon btn-danger" on:click={() => handleDeleteZSetMember(item.member)} title="Delete member from zset">
-                          <Icons name="trash" size={12} />
-                        </button>
+                    <td colspan="3" class="no-matches-cell">
+                      <div class="no-matches-content">
+                        <span>No members matching "<strong>{resultSearchQuery}</strong>"</span>
+                        <button class="btn btn-sm" on:click={() => resultSearchQuery = ''}>Clear filter</button>
                       </div>
                     </td>
                   </tr>
-                {/each}
+                {:else}
+                  {#each filteredZSetData as item, i}
+                    <tr>
+                      <td class="mono text-accent">
+                        {#if resultSearchQuery.trim()}
+                          {@html highlightText(String(item.score), resultSearchQuery)}
+                        {:else}
+                          {item.score}
+                        {/if}
+                      </td>
+                      <td class="mono">
+                        {#if resultSearchQuery.trim()}
+                          {@html highlightText(item.member, resultSearchQuery)}
+                        {:else}
+                          {item.member}
+                        {/if}
+                      </td>
+                      <td>
+                        <div style="display: flex; gap: 4px;">
+                          <button class="btn btn-sm btn-icon copy-btn" on:click={() => copyText(item.member, `zset_${i}`)} title="Copy member">
+                            {#if copyStatus[`zset_${i}`]}
+                              <Icons name="check" size={12} />
+                            {:else}
+                              <Icons name="copy" size={12} />
+                            {/if}
+                          </button>
+                          <button class="btn btn-sm btn-icon btn-danger" on:click={() => handleDeleteZSetMember(item.member)} title="Delete member from zset">
+                            <Icons name="trash" size={12} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  {/each}
+                {/if}
               </tbody>
             </table>
           </div>
@@ -531,7 +792,7 @@
           </div>
 
         {:else}
-          <pre class="value-display mono">{$keyDetail.value.data}</pre>
+          <pre class="value-display mono">{@html resultSearchQuery.trim() ? highlightText($keyDetail.value.data, resultSearchQuery) : escapeHtml($keyDetail.value.data)}</pre>
         {/if}
       </div>
     </div>
@@ -823,5 +1084,108 @@
   .confirm-modal p { font-size: 13px; margin-bottom: var(--gap-md); }
   .confirm-actions {
     display: flex; gap: var(--gap-sm); justify-content: flex-end;
+  }
+
+  /* Result search bar & highlights */
+  .result-search-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: var(--gap-md);
+    padding: 6px 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius-sm);
+  }
+  .result-search-input-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+  }
+  .result-search-icon {
+    position: absolute;
+    left: 8px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    pointer-events: none;
+  }
+  .result-search-input {
+    width: 100%;
+    height: 28px;
+    padding-left: 28px;
+    padding-right: 28px;
+    font-size: 11px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-secondary);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+  }
+  .result-search-input:focus {
+    border-color: var(--accent);
+    outline: none;
+  }
+  .clear-search-btn {
+    position: absolute;
+    right: 4px;
+    padding: 2px;
+    height: 20px;
+    width: 20px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 2px;
+  }
+  .clear-search-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+  }
+  .search-match-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(0, 212, 255, 0.12);
+    color: #00d4ff;
+    border: 1px solid rgba(0, 212, 255, 0.25);
+    white-space: nowrap;
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+  .search-match-badge .no-match {
+    color: #f87171;
+    background: rgba(248, 113, 113, 0.12);
+    border-color: rgba(248, 113, 113, 0.25);
+  }
+  :global(.search-match) {
+    background: rgba(255, 204, 0, 0.35);
+    color: #fff;
+    padding: 1px 3px;
+    border-radius: 2px;
+    font-weight: 600;
+    text-shadow: 0 0 2px rgba(0,0,0,0.8);
+    border-bottom: 2px solid #ffcc00;
+  }
+  .no-matches-cell {
+    padding: var(--gap-lg) !important;
+    text-align: center;
+  }
+  .no-matches-content, .no-matches-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: var(--gap-lg);
+    color: var(--text-muted);
+    font-size: 12px;
+    background: var(--bg-primary);
+    border-radius: var(--radius-sm);
   }
 </style>

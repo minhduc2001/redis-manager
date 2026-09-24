@@ -15,6 +15,14 @@
   let historyIndex = -1;
   let executing = false;
   let outputEl: HTMLDivElement;
+  let consoleFilter = '';
+
+  $: filteredHistory = consoleFilter.trim()
+    ? history.filter((entry) =>
+        entry.command.toLowerCase().includes(consoleFilter.trim().toLowerCase()) ||
+        entry.result.toLowerCase().includes(consoleFilter.trim().toLowerCase())
+      )
+    : history;
 
   async function executeCommand() {
     const cmd = inputValue.trim();
@@ -96,6 +104,18 @@
       <span>Redis CLI</span>
     </span>
     <div class="console-actions">
+      {#if history.length > 0}
+        <div class="console-filter-wrap">
+          <input
+            class="input input-sm console-filter-input"
+            bind:value={consoleFilter}
+            placeholder="Filter output..."
+          />
+          {#if consoleFilter}
+            <button class="clear-mini-btn" on:click={() => consoleFilter = ''}>✕</button>
+          {/if}
+        </div>
+      {/if}
       <button class="btn btn-sm" on:click={clearHistory} disabled={history.length === 0}>Clear</button>
     </div>
   </div>
@@ -113,9 +133,13 @@
           {/each}
         </div>
       </div>
+    {:else if filteredHistory.length === 0 && consoleFilter.trim()}
+      <p class="text-muted" style="padding: 16px; font-size: 12px; text-align: center;">
+        No command outputs matching "{consoleFilter}"
+      </p>
     {/if}
 
-    {#each history as entry (entry.timestamp)}
+    {#each filteredHistory as entry (entry.timestamp)}
       <div class="history-entry">
         <div class="entry-command">
           <span class="prompt">redis&gt;</span>
@@ -161,6 +185,39 @@
     justify-content: space-between;
     padding: var(--gap-sm) var(--gap-md);
     border-bottom: 1px solid var(--border-primary);
+  }
+  .console-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--gap-sm);
+  }
+  .console-filter-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  .console-filter-input {
+    width: 170px;
+    height: 26px;
+    font-size: 11px;
+    padding-right: 22px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-secondary);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+  }
+  .clear-mini-btn {
+    position: absolute;
+    right: 4px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 10px;
+    cursor: pointer;
+    padding: 2px 4px;
+  }
+  .clear-mini-btn:hover {
+    color: var(--text-primary);
   }
   .console-title {
     font-size: 13px;
