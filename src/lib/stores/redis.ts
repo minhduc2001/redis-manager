@@ -390,6 +390,13 @@ export async function searchKeys(pattern: string, mode: SearchMode) {
   }
 }
 
+export async function filterByFolder(prefix: string) {
+  const delimiter = prefix.includes('.') && !prefix.includes(':') ? '.' : ':';
+  const query = prefix.endsWith(':') || prefix.endsWith('.') ? prefix : `${prefix}${delimiter}`;
+  searchMode.set('prefix');
+  await searchKeys(query, 'prefix');
+}
+
 export async function loadKeyDetail(key: string) {
   try {
     isLoadingDetail.set(true);

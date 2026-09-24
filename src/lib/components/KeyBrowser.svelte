@@ -15,6 +15,7 @@
     isLoading,
     isSearching,
     searchPattern,
+    filterByFolder,
   } from '$lib/stores/redis';
   import SearchBar from './SearchBar.svelte';
   import CreateKeyModal from './CreateKeyModal.svelte';
@@ -132,6 +133,11 @@
       expandedFolders.add(path);
     }
     expandedFolders = new Set(expandedFolders);
+  }
+
+  function handleScanFolder(prefix: string, e: MouseEvent) {
+    e.stopPropagation();
+    filterByFolder(prefix);
   }
 
   function handleKeyClick(keyName: string) {
@@ -363,8 +369,19 @@
             <span class="folder-icon-sym" style="display: flex; align-items: center;">
               <Icons name={expandedFolders.has(folder.prefix) ? 'folder-open' : 'folder'} size={14} />
             </span>
-            <span class="folder-name truncate">{folder.prefix}</span>
+            <span class="folder-name truncate" title={folder.prefix}>{folder.prefix}</span>
             <span class="folder-count">{folder.keys.length}</span>
+
+            <!-- Scan / Filter Folder from Redis button -->
+            <button
+              type="button"
+              class="folder-scan-btn"
+              on:click={(e) => handleScanFolder(folder.prefix, e)}
+              title="Quét toàn bộ key trong thư mục này từ Redis ({folder.prefix}:*)"
+            >
+              <Icons name="search" size={10} />
+              <span>Scan folder</span>
+            </button>
           </div>
 
           {#if expandedFolders.has(folder.prefix)}
@@ -392,6 +409,14 @@
                 <div class="folder-load-more">
                   <button class="btn btn-sm" on:click={() => showMoreInFolder(folder.prefix)}>
                     Show more ({folderLimits.get(folder.prefix) || FOLDER_LIMIT}/{folder.keys.length})
+                  </button>
+                  <button
+                    class="btn btn-sm btn-subtle-scan"
+                    on:click={(e) => handleScanFolder(folder.prefix, e)}
+                    title="Quét sâu từ Redis cho {folder.prefix}:*"
+                  >
+                    <Icons name="bolt" size={11} />
+                    <span>Scan deeper in Redis</span>
                   </button>
                 </div>
               {/if}
@@ -729,6 +754,55 @@
     background: rgba(255, 255, 255, 0.05);
     padding: 1px 6px;
     border-radius: 8px;
+  }
+  .folder-scan-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(0, 212, 255, 0.08);
+    border: 1px solid rgba(0, 212, 255, 0.25);
+    color: var(--accent);
+    font-size: 10px;
+    font-weight: 500;
+    padding: 1px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0.65;
+    transition: all var(--transition-fast);
+    white-space: nowrap;
+  }
+  .folder-header:hover .folder-scan-btn {
+    opacity: 1;
+    border-color: rgba(0, 212, 255, 0.5);
+  }
+  .folder-scan-btn:hover {
+    background: rgba(0, 212, 255, 0.22);
+    box-shadow: 0 0 6px var(--accent-glow);
+    color: #fff;
+  }
+
+  .folder-load-more {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px 6px 32px;
+    flex-wrap: wrap;
+  }
+
+  .btn-subtle-scan {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(0, 212, 255, 0.1);
+    border: 1px solid rgba(0, 212, 255, 0.3);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .btn-subtle-scan:hover {
+    background: rgba(0, 212, 255, 0.22);
+    color: #fff;
+    box-shadow: 0 0 8px var(--accent-glow);
   }
 
   /* Key item */

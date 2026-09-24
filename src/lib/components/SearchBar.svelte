@@ -9,6 +9,21 @@
   // Sync mode with store
   searchMode.subscribe((v) => (currentMode = v));
 
+  // Sync inputValue when searchPattern or searchMode changes externally
+  let lastSyncedPattern = '';
+  $: if ($searchPattern !== lastSyncedPattern) {
+    lastSyncedPattern = $searchPattern;
+    if ($searchPattern === '*') {
+      inputValue = '';
+    } else if ($searchMode === 'prefix' && $searchPattern.endsWith('*')) {
+      inputValue = $searchPattern.slice(0, -1);
+    } else if ($searchMode === 'contains' && $searchPattern.startsWith('*') && $searchPattern.endsWith('*') && $searchPattern.length > 2) {
+      inputValue = $searchPattern.slice(1, -1);
+    } else {
+      inputValue = $searchPattern;
+    }
+  }
+
   function handleInput() {
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
