@@ -1,6 +1,6 @@
 [package]
 name = "redis-manager"
-version = "0.1.6"
+version = "0.1.7"
 description = "Redis Manager - A lightweight Redis management tool"
 authors = ["you"]
 edition = "2021"
