@@ -9,10 +9,15 @@
     updateKeyTtl,
     renameRedisKey,
     addListItem,
+    deleteListItem,
     addSetMember,
+    deleteSetMember,
+    addZSetMember,
+    deleteZSetMember,
     deleteSelectedKeys,
     loadKeyDetail,
   } from '$lib/stores/redis';
+  import Icons from './Icons.svelte';
 
   let editing = false;
   let editValue = '';
@@ -23,6 +28,8 @@
   let newHashValue = '';
   let newListItem = '';
   let newSetMember = '';
+  let newZSetScore = '0';
+  let newZSetMember = '';
   let editingHashField: string | null = null;
   let editingHashValue = '';
   let showDeleteConfirm = false;
@@ -163,6 +170,33 @@
     }
   }
 
+  async function handleDeleteListItem(item: string) {
+    if ($keyDetail) {
+      await deleteListItem($keyDetail.key, item);
+    }
+  }
+
+  async function handleDeleteSetMember(member: string) {
+    if ($keyDetail) {
+      await deleteSetMember($keyDetail.key, member);
+    }
+  }
+
+  async function handleAddZSetMember() {
+    if ($keyDetail && newZSetMember.trim()) {
+      const score = parseFloat(newZSetScore.trim()) || 0;
+      await addZSetMember($keyDetail.key, score, newZSetMember.trim());
+      newZSetMember = '';
+      newZSetScore = '0';
+    }
+  }
+
+  async function handleDeleteZSetMember(member: string) {
+    if ($keyDetail) {
+      await deleteZSetMember($keyDetail.key, member);
+    }
+  }
+
   function formatTtl(seconds: number): string {
     if (seconds < 0) return 'No expiry';
     if (seconds < 60) return `${seconds}s`;
@@ -236,30 +270,53 @@
             <div class="key-title-wrapper">
               <h3 class="key-title mono truncate" title={$keyDetail.key}>{$keyDetail.key}</h3>
               <button class="btn btn-sm btn-icon copy-btn" on:click={() => copyText($keyDetail.key, 'key')} title="Copy Key">
-                {copyStatus['key'] ? '✅' : '📋'}
+                {#if copyStatus['key']}
+                  <Icons name="check" size={13} />
+                {:else}
+                  <Icons name="copy" size={13} />
+                {/if}
               </button>
             </div>
           {/if}
           <div class="key-meta">
             <span class="badge {getTypeBadgeClass($keyDetail.key_type)}">{$keyDetail.key_type}</span>
             <span class="meta-item" title="Size">{$keyDetail.size} {$keyDetail.key_type === 'string' ? 'bytes' : 'items'}</span>
-            <span class="meta-item" title="TTL">⏱ {formatTtl($keyDetail.ttl)}</span>
+            <span class="meta-item" title="TTL" style="display: inline-flex; align-items: center; gap: 4px;">
+              <Icons name="clock" size={12} />
+              <span>{formatTtl($keyDetail.ttl)}</span>
+            </span>
           </div>
         </div>
         <div class="detail-actions">
-          <button class="btn btn-sm" on:click={() => copyText(getValueString(), 'val')} title="Copy Value">
-            {copyStatus['val'] ? '✅ Copied' : '📋 Copy'}
+          <button class="btn btn-sm" style="display: inline-flex; align-items: center; gap: 4px;" on:click={() => copyText(getValueString(), 'val')} title="Copy Value">
+            {#if copyStatus['val']}
+              <Icons name="check" size={13} />
+              <span>Copied</span>
+            {:else}
+              <Icons name="copy" size={13} />
+              <span>Copy</span>
+            {/if}
           </button>
-          <button class="btn btn-sm" on:click={startRename} title="Rename key">✏ Rename</button>
-          <button class="btn btn-sm" on:click={() => loadKeyDetail($keyDetail.key)} title="Refresh">⟳</button>
-          <button class="btn btn-sm btn-danger" on:click={askDeleteKey} title="Delete key">🗑</button>
+          <button class="btn btn-sm" style="display: inline-flex; align-items: center; gap: 4px;" on:click={startRename} title="Rename key">
+            <Icons name="edit" size={13} />
+            <span>Rename</span>
+          </button>
+          <button class="btn btn-sm btn-icon" on:click={() => loadKeyDetail($keyDetail.key)} title="Refresh">
+            <Icons name="refresh" size={13} />
+          </button>
+          <button class="btn btn-sm btn-icon btn-danger" on:click={askDeleteKey} title="Delete key">
+            <Icons name="trash" size={13} />
+          </button>
         </div>
       </div>
 
       <!-- TTL Editor -->
       <div class="ttl-row">
-        <label class="text-muted">TTL (seconds):</label>
-        <input class="input input-mono" style="width: 140px;" bind:value={editTtl} placeholder="No expiry" />
+        <label class="text-muted" for="ttl-field" style="display: inline-flex; align-items: center; gap: 4px;">
+          <Icons name="clock" size={12} />
+          <span>TTL (seconds):</span>
+        </label>
+        <input id="ttl-field" class="input input-mono" style="width: 140px;" bind:value={editTtl} placeholder="No expiry" />
         <button class="btn btn-sm" on:click={saveTtl}>Set TTL</button>
       </div>
 
@@ -270,11 +327,17 @@
             <span class="text-muted">Value</span>
             {#if editing}
               <div class="value-actions">
-                <button class="btn btn-sm btn-primary" on:click={saveEdit}>💾 Save</button>
+                <button class="btn btn-sm btn-primary" style="display: inline-flex; align-items: center; gap: 4px;" on:click={saveEdit}>
+                  <Icons name="save" size={13} />
+                  <span>Save</span>
+                </button>
                 <button class="btn btn-sm" on:click={cancelEdit}>Cancel</button>
               </div>
             {:else}
-              <button class="btn btn-sm" on:click={startEdit}>✏ Edit</button>
+              <button class="btn btn-sm" style="display: inline-flex; align-items: center; gap: 4px;" on:click={startEdit}>
+                <Icons name="edit" size={13} />
+                <span>Edit</span>
+              </button>
             {/if}
           </div>
           {#if editing}
@@ -319,17 +382,29 @@
                         <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px;">
                           <span class="cell-value" title={item.value}>{item.value}</span>
                           <button class="btn btn-sm btn-icon copy-btn" on:click={() => copyText(item.value, `hf_${item.field}`)} title="Copy field value">
-                            {copyStatus[`hf_${item.field}`] ? '✅' : '📋'}
+                            {#if copyStatus[`hf_${item.field}`]}
+                              <Icons name="check" size={12} />
+                            {:else}
+                              <Icons name="copy" size={12} />
+                            {/if}
                           </button>
                         </div>
                       {/if}
                     </td>
                     <td>
                       {#if editingHashField === item.field}
-                        <button class="btn btn-sm btn-primary" on:click={saveHashFieldEdit}>✓</button>
+                        <button class="btn btn-sm btn-primary" on:click={saveHashFieldEdit}>
+                          <Icons name="check" size={12} />
+                        </button>
                       {:else}
-                        <button class="btn btn-sm btn-icon" on:click={() => startEditHashField(item.field, item.value)}>✏</button>
-                        <button class="btn btn-sm btn-icon btn-danger" on:click={() => handleDeleteHashField(item.field)}>✕</button>
+                        <div style="display: flex; gap: 4px;">
+                          <button class="btn btn-sm btn-icon" on:click={() => startEditHashField(item.field, item.value)} title="Edit field">
+                            <Icons name="edit" size={12} />
+                          </button>
+                          <button class="btn btn-sm btn-icon btn-danger" on:click={() => handleDeleteHashField(item.field)} title="Delete field">
+                            <Icons name="trash" size={12} />
+                          </button>
+                        </div>
                       {/if}
                     </td>
                   </tr>
@@ -340,7 +415,10 @@
           <div class="add-row">
             <input class="input input-mono" bind:value={newHashField} placeholder="Field name" />
             <input class="input input-mono" bind:value={newHashValue} placeholder="Value" />
-            <button class="btn btn-sm btn-primary" on:click={handleAddHashField}>+ Add</button>
+            <button class="btn btn-sm btn-primary" style="display: inline-flex; align-items: center; gap: 4px;" on:click={handleAddHashField}>
+              <Icons name="plus" size={12} />
+              <span>Add</span>
+            </button>
           </div>
 
         {:else if $keyDetail.value.type === 'List'}
@@ -351,13 +429,28 @@
             {#each $keyDetail.value.data as item, i}
               <div class="list-item">
                 <span class="item-index">{i}</span>
-                <span class="mono truncate">{item}</span>
+                <span class="mono truncate cell-item-text" title={item}>{item}</span>
+                <div class="item-actions">
+                  <button class="btn btn-sm btn-icon copy-btn" on:click={() => copyText(item, `li_${i}`)} title="Copy item value">
+                    {#if copyStatus[`li_${i}`]}
+                      <Icons name="check" size={12} />
+                    {:else}
+                      <Icons name="copy" size={12} />
+                    {/if}
+                  </button>
+                  <button class="btn btn-sm btn-icon btn-danger" on:click={() => handleDeleteListItem(item)} title="Delete item from list">
+                    <Icons name="trash" size={12} />
+                  </button>
+                </div>
               </div>
             {/each}
           </div>
           <div class="add-row">
             <input class="input input-mono" bind:value={newListItem} placeholder="New item value" on:keydown={(e) => e.key === 'Enter' && handleAddListItem()} />
-            <button class="btn btn-sm btn-primary" on:click={handleAddListItem}>+ Add</button>
+            <button class="btn btn-sm btn-primary" style="display: inline-flex; align-items: center; gap: 4px;" on:click={handleAddListItem}>
+              <Icons name="plus" size={12} />
+              <span>Add</span>
+            </button>
           </div>
 
         {:else if $keyDetail.value.type === 'Set'}
@@ -365,15 +458,30 @@
             <span class="text-muted">Set Members ({$keyDetail.size})</span>
           </div>
           <div class="list-items">
-            {#each $keyDetail.value.data as item}
+            {#each $keyDetail.value.data as item, i}
               <div class="list-item">
-                <span class="mono truncate">{item}</span>
+                <span class="mono truncate cell-item-text" title={item}>{item}</span>
+                <div class="item-actions">
+                  <button class="btn btn-sm btn-icon copy-btn" on:click={() => copyText(item, `set_${i}`)} title="Copy member value">
+                    {#if copyStatus[`set_${i}`]}
+                      <Icons name="check" size={12} />
+                    {:else}
+                      <Icons name="copy" size={12} />
+                    {/if}
+                  </button>
+                  <button class="btn btn-sm btn-icon btn-danger" on:click={() => handleDeleteSetMember(item)} title="Delete member from set">
+                    <Icons name="trash" size={12} />
+                  </button>
+                </div>
               </div>
             {/each}
           </div>
           <div class="add-row">
             <input class="input input-mono" bind:value={newSetMember} placeholder="New member" on:keydown={(e) => e.key === 'Enter' && handleAddSetMember()} />
-            <button class="btn btn-sm btn-primary" on:click={handleAddSetMember}>+ Add</button>
+            <button class="btn btn-sm btn-primary" style="display: inline-flex; align-items: center; gap: 4px;" on:click={handleAddSetMember}>
+              <Icons name="plus" size={12} />
+              <span>Add</span>
+            </button>
           </div>
 
         {:else if $keyDetail.value.type === 'ZSet'}
@@ -384,19 +492,42 @@
             <table>
               <thead>
                 <tr>
-                  <th>Score</th>
+                  <th style="width: 120px;">Score</th>
                   <th>Member</th>
+                  <th style="width: 80px;">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {#each $keyDetail.value.data as item}
+                {#each $keyDetail.value.data as item, i}
                   <tr>
                     <td class="mono text-accent">{item.score}</td>
                     <td class="mono">{item.member}</td>
+                    <td>
+                      <div style="display: flex; gap: 4px;">
+                        <button class="btn btn-sm btn-icon copy-btn" on:click={() => copyText(item.member, `zset_${i}`)} title="Copy member">
+                          {#if copyStatus[`zset_${i}`]}
+                            <Icons name="check" size={12} />
+                          {:else}
+                            <Icons name="copy" size={12} />
+                          {/if}
+                        </button>
+                        <button class="btn btn-sm btn-icon btn-danger" on:click={() => handleDeleteZSetMember(item.member)} title="Delete member from zset">
+                          <Icons name="trash" size={12} />
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 {/each}
               </tbody>
             </table>
+          </div>
+          <div class="add-row">
+            <input class="input input-mono" style="max-width: 110px;" type="number" step="any" bind:value={newZSetScore} placeholder="Score" />
+            <input class="input input-mono" bind:value={newZSetMember} placeholder="New member name" on:keydown={(e) => e.key === 'Enter' && handleAddZSetMember()} />
+            <button class="btn btn-sm btn-primary" style="display: inline-flex; align-items: center; gap: 4px;" on:click={handleAddZSetMember}>
+              <Icons name="plus" size={12} />
+              <span>Add</span>
+            </button>
           </div>
 
         {:else}
@@ -407,7 +538,11 @@
   {/if}
 
   {#if showDeleteConfirm}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="confirm-overlay" on:click={() => showDeleteConfirm = false}>
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="confirm-modal animate-fade" on:click|stopPropagation>
         <p>Delete key <strong class="mono">{$keyDetail?.key}</strong>?</p>
         <p class="text-muted" style="font-size: 11px; margin-top: 4px;">This action cannot be undone.</p>
@@ -645,6 +780,20 @@
     font-size: 10px;
     min-width: 30px;
     font-family: var(--font-mono);
+  }
+  .cell-item-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .item-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    opacity: 0.7;
+    transition: opacity var(--transition-fast);
+  }
+  .list-item:hover .item-actions {
+    opacity: 1;
   }
 
   .add-row {

@@ -18,6 +18,7 @@
   } from '$lib/stores/redis';
   import SearchBar from './SearchBar.svelte';
   import CreateKeyModal from './CreateKeyModal.svelte';
+  import Icons from './Icons.svelte';
 
   let showDeleteConfirm = false;
   let showCreateModal = false;
@@ -254,23 +255,32 @@
               class:active={viewMode === 'tree'}
               on:click={() => setViewMode('tree')}
               title="Tree view"
-            >🗂 Tree</button>
+            >
+              <Icons name="tree" size={13} />
+              <span>Tree</span>
+            </button>
             <button
               class="toggle-btn"
               class:active={viewMode === 'flat'}
               on:click={() => setViewMode('flat')}
               title="Flat view"
-            >≡ Flat</button>
+            >
+              <Icons name="flat" size={13} />
+              <span>Flat</span>
+            </button>
           </div>
 
           <!-- Add Key Button -->
           <button class="btn btn-sm btn-accent" on:click={() => showCreateModal = true} title="Create new key">
-            + New
+            <Icons name="plus" size={13} />
+            <span>New</span>
           </button>
 
           <!-- Refresh -->
           <button class="btn btn-sm btn-icon" on:click={handleRefresh} title="Refresh keys (Reload)">
-            <span class:animate-spin={$isLoading}>⟳</span>
+            <span class:animate-spin={$isLoading} style="display: flex;">
+              <Icons name="refresh" size={13} />
+            </span>
           </button>
         </div>
       </div>
@@ -288,10 +298,17 @@
 
           <div class="batch-right">
             <button class="btn btn-sm" on:click={copySelectedKeyNames} title="Copy selected key names to clipboard">
-              {copyFeedback ? '✅ Copied!' : '📋 Copy'}
+              {#if copyFeedback}
+                <Icons name="check" size={13} />
+                <span>Copied!</span>
+              {:else}
+                <Icons name="copy" size={13} />
+                <span>Copy</span>
+              {/if}
             </button>
             <button class="btn btn-sm btn-danger" on:click={confirmDelete} title="Delete selected keys">
-              🗑 Delete ({$selectedKeys.size})
+              <Icons name="trash" size={13} />
+              <span>Delete ({$selectedKeys.size})</span>
             </button>
           </div>
         </div>
@@ -303,11 +320,14 @@
   <div class="key-list">
     {#if $keys.length === 0 && !$isLoading && !$isSearching}
       <div class="empty-state">
-        <div class="empty-icon">📭</div>
+        <div class="empty-icon" style="color: var(--text-muted); opacity: 0.6;">
+          <Icons name="folder-open" size={42} />
+        </div>
         <p class="empty-text">No keys found</p>
         <p class="text-muted">Try a different search or create a new key</p>
-        <button class="btn btn-sm btn-accent" style="margin-top: 8px;" on:click={() => showCreateModal = true}>
-          + Create Key
+        <button class="btn btn-sm btn-accent" style="margin-top: 8px; display: inline-flex; align-items: center; gap: 4px;" on:click={() => showCreateModal = true}>
+          <Icons name="plus" size={13} />
+          <span>Create Key</span>
         </button>
       </div>
     {:else if viewMode === 'tree'}
@@ -318,7 +338,9 @@
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div class="folder-header" on:click={() => toggleFolder(folder.prefix)}>
-            <span class="folder-arrow" class:open={expandedFolders.has(folder.prefix)}>▸</span>
+            <span class="folder-arrow">
+              <Icons name={expandedFolders.has(folder.prefix) ? 'chevron-down' : 'chevron-right'} size={12} />
+            </span>
 
             <!-- Folder Select Checkbox -->
             <div class="folder-checkbox" on:click={(e) => toggleFolderSelect(folder.keys, e)} title="Select all in folder">
@@ -331,7 +353,9 @@
               </div>
             </div>
 
-            <span class="folder-icon-sym">{expandedFolders.has(folder.prefix) ? '📂' : '📁'}</span>
+            <span class="folder-icon-sym" style="display: flex; align-items: center;">
+              <Icons name={expandedFolders.has(folder.prefix) ? 'folder-open' : 'folder'} size={14} />
+            </span>
             <span class="folder-name truncate">{folder.prefix}</span>
             <span class="folder-count">{folder.keys.length}</span>
           </div>
@@ -421,11 +445,13 @@
 
     {#if $hasMore && !$isSearching}
       <div class="load-more">
-        <button class="btn btn-sm btn-primary" on:click={loadMore} disabled={$isLoading}>
+        <button class="btn btn-sm btn-primary" style="display: inline-flex; align-items: center; gap: 6px;" on:click={loadMore} disabled={$isLoading}>
           {#if $isLoading}
-            <span class="animate-spin">⟳</span> Scanning...
+            <span class="animate-spin" style="display: flex;"><Icons name="refresh" size={13} /></span>
+            <span>Scanning...</span>
           {:else}
-            ⚡ Scan more keys from Redis
+            <Icons name="bolt" size={13} />
+            <span>Scan more keys from Redis</span>
           {/if}
         </button>
       </div>
@@ -435,7 +461,10 @@
   <!-- Footer Info -->
   <div class="browser-footer">
     {#if $searchPattern !== '*'}
-      <span class="text-accent">🔍 {$keys.length} matches</span>
+      <span class="text-accent" style="display: flex; align-items: center; gap: 4px;">
+        <Icons name="search" size={12} />
+        <span>{$keys.length} matches</span>
+      </span>
     {:else}
       <span class="text-muted">{$keys.length} keys loaded</span>
     {/if}

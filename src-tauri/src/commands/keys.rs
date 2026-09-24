@@ -119,7 +119,6 @@ pub async fn scan_keys(
 
         for (idx, (_addr, mut con)) in master_conns.into_iter().enumerate() {
             let cur = node_cursors[idx];
-            // If not first run and node already finished, skip
             if !is_first_run && cur == 0 {
                 continue;
             }
@@ -159,7 +158,6 @@ pub async fn scan_keys(
             }
         }
 
-        // If all nodes have returned to cursor 0, finished!
         let all_done = node_cursors.iter().all(|&c| c == 0);
         let next_cursor = if all_done {
             "0".to_string()
@@ -192,7 +190,6 @@ pub async fn search_keys(
     let mut all_entries: Vec<KeyEntry> = Vec::new();
     let mut seen_keys = HashSet::new();
 
-    // Iterate over EVERY master node in the cluster
     for (_addr, mut con) in master_conns {
         let mut cursor: u64 = 0;
         let mut iterations = 0;
@@ -282,16 +279,23 @@ async fn get_key_detail_impl(
 
     let (value, size) = match key_type.as_str() {
         "string" => {
-            let v: String = con.get(key).await.map_err(|e| e.to_string())?;
-            let s = v.len();
-            (KeyValue::String(v), s)
+            let raw: Vec<u8> = con.get(key).await.map_err(|e| e.to_string())?;
+            let s = raw.len();
+            let val_str = match String::from_utf8(raw) {
+                Ok(str_val) => str_val,
+                Err(err) => String::from_utf8_lossy(&err.into_bytes()).to_string(),
+            };
+            (KeyValue::String(val_str), s)
         }
         "hash" => {
-            let map: Vec<(String, String)> = con.hgetall(key).await.map_err(|e| e.to_string())?;
-            let s = map.len();
-            let fields: Vec<HashField> = map
+            let raw_map: Vec<(Vec<u8>, Vec<u8>)> = con.hgetall(key).await.map_err(|e| e.to_string())?;
+            let s = raw_map.len();
+            let fields: Vec<HashField> = raw_map
                 .into_iter()
-                .map(|(f, v)| HashField { field: f, value: v })
+                .map(|(f, v)| HashField {
+                    field: String::from_utf8(f.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&f).to_string()),
+                    value: String::from_utf8(v.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&v).to_string()),
+                })
                 .collect();
             (KeyValue::Hash(fields), s)
         }
@@ -299,26 +303,37 @@ async fn get_key_detail_impl(
             let len: isize = con.llen(key).await.map_err(|e| e.to_string())?;
             let limit = std::cmp::min(len, 500);
             let items: Vec<String> = if limit > 0 {
-                con.lrange(key, 0, limit - 1).await.map_err(|e| e.to_string())?
+                let raw_items: Vec<Vec<u8>> = con.lrange(key, 0, limit - 1).await.map_err(|e| e.to_string())?;
+                raw_items
+                    .into_iter()
+                    .map(|b| String::from_utf8(b.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&b).to_string()))
+                    .collect()
             } else {
                 Vec::new()
             };
             (KeyValue::List(items), len as usize)
         }
         "set" => {
-            let members: Vec<String> = con.smembers(key).await.map_err(|e| e.to_string())?;
-            let s = members.len();
+            let raw_members: Vec<Vec<u8>> = con.smembers(key).await.map_err(|e| e.to_string())?;
+            let s = raw_members.len();
+            let members: Vec<String> = raw_members
+                .into_iter()
+                .map(|b| String::from_utf8(b.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&b).to_string()))
+                .collect();
             (KeyValue::Set(members), s)
         }
         "zset" => {
-            let members: Vec<(String, f64)> = con
+            let members: Vec<(Vec<u8>, f64)> = con
                 .zrange_withscores(key, 0isize, 499isize)
                 .await
                 .map_err(|e| e.to_string())?;
             let total: usize = con.zcard(key).await.map_err(|e| e.to_string())?;
             let zset: Vec<ZSetMember> = members
                 .into_iter()
-                .map(|(m, s)| ZSetMember { member: m, score: s })
+                .map(|(m, s)| ZSetMember {
+                    member: String::from_utf8(m.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&m).to_string()),
+                    score: s,
+                })
                 .collect();
             (KeyValue::ZSet(zset), total)
         }
@@ -356,24 +371,31 @@ async fn get_key_detail_cluster(
 
     let (value, size) = match key_type.as_str() {
         "string" => {
-            let v: String = redis::cmd("GET")
+            let raw: Vec<u8> = redis::cmd("GET")
                 .arg(key)
                 .query_async(con)
                 .await
                 .map_err(|e| e.to_string())?;
-            let s = v.len();
-            (KeyValue::String(v), s)
+            let s = raw.len();
+            let val_str = match String::from_utf8(raw) {
+                Ok(str_val) => str_val,
+                Err(err) => String::from_utf8_lossy(&err.into_bytes()).to_string(),
+            };
+            (KeyValue::String(val_str), s)
         }
         "hash" => {
-            let map: Vec<(String, String)> = redis::cmd("HGETALL")
+            let raw_map: Vec<(Vec<u8>, Vec<u8>)> = redis::cmd("HGETALL")
                 .arg(key)
                 .query_async(con)
                 .await
                 .map_err(|e| e.to_string())?;
-            let s = map.len();
-            let fields: Vec<HashField> = map
+            let s = raw_map.len();
+            let fields: Vec<HashField> = raw_map
                 .into_iter()
-                .map(|(f, v)| HashField { field: f, value: v })
+                .map(|(f, v)| HashField {
+                    field: String::from_utf8(f.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&f).to_string()),
+                    value: String::from_utf8(v.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&v).to_string()),
+                })
                 .collect();
             (KeyValue::Hash(fields), s)
         }
@@ -385,29 +407,37 @@ async fn get_key_detail_cluster(
                 .map_err(|e| e.to_string())?;
             let limit = std::cmp::min(len, 500);
             let items: Vec<String> = if limit > 0 {
-                redis::cmd("LRANGE")
+                let raw_items: Vec<Vec<u8>> = redis::cmd("LRANGE")
                     .arg(key)
                     .arg(0)
                     .arg(limit - 1)
                     .query_async(con)
                     .await
-                    .map_err(|e| e.to_string())?
+                    .map_err(|e| e.to_string())?;
+                raw_items
+                    .into_iter()
+                    .map(|b| String::from_utf8(b.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&b).to_string()))
+                    .collect()
             } else {
                 Vec::new()
             };
             (KeyValue::List(items), len as usize)
         }
         "set" => {
-            let members: Vec<String> = redis::cmd("SMEMBERS")
+            let raw_members: Vec<Vec<u8>> = redis::cmd("SMEMBERS")
                 .arg(key)
                 .query_async(con)
                 .await
                 .map_err(|e| e.to_string())?;
-            let s = members.len();
+            let s = raw_members.len();
+            let members: Vec<String> = raw_members
+                .into_iter()
+                .map(|b| String::from_utf8(b.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&b).to_string()))
+                .collect();
             (KeyValue::Set(members), s)
         }
         "zset" => {
-            let members: Vec<(String, f64)> = redis::cmd("ZRANGE")
+            let members: Vec<(Vec<u8>, f64)> = redis::cmd("ZRANGE")
                 .arg(key)
                 .arg(0)
                 .arg(499)
@@ -422,7 +452,10 @@ async fn get_key_detail_cluster(
                 .map_err(|e| e.to_string())?;
             let zset: Vec<ZSetMember> = members
                 .into_iter()
-                .map(|(m, s)| ZSetMember { member: m, score: s })
+                .map(|(m, s)| ZSetMember {
+                    member: String::from_utf8(m.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&m).to_string()),
+                    score: s,
+                })
                 .collect();
             (KeyValue::ZSet(zset), total as usize)
         }
@@ -646,6 +679,39 @@ pub async fn add_list_item(
 }
 
 #[tauri::command]
+pub async fn delete_list_item(
+    state: State<'_, RedisState>,
+    key: String,
+    value: String,
+    count: Option<i64>,
+) -> Result<u64, String> {
+    let conn = state.get_active_connection().await?;
+    let cnt = count.unwrap_or(1);
+    match conn {
+        RedisConnection::Standalone(mut con) => {
+            let removed: u64 = redis::cmd("LREM")
+                .arg(&key)
+                .arg(cnt)
+                .arg(&value)
+                .query_async(&mut con)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(removed)
+        }
+        RedisConnection::Cluster { mut cluster, .. } => {
+            let removed: u64 = redis::cmd("LREM")
+                .arg(&key)
+                .arg(cnt)
+                .arg(&value)
+                .query_async(&mut cluster)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(removed)
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn add_set_member(
     state: State<'_, RedisState>,
     key: String,
@@ -666,6 +732,90 @@ pub async fn add_set_member(
         }
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_set_member(
+    state: State<'_, RedisState>,
+    key: String,
+    member: String,
+) -> Result<u64, String> {
+    let conn = state.get_active_connection().await?;
+    match conn {
+        RedisConnection::Standalone(mut con) => {
+            let removed: u64 = con.srem(&key, &member).await.map_err(|e| e.to_string())?;
+            Ok(removed)
+        }
+        RedisConnection::Cluster { mut cluster, .. } => {
+            let removed: u64 = redis::cmd("SREM")
+                .arg(&key)
+                .arg(&member)
+                .query_async(&mut cluster)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(removed)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn add_zset_member(
+    state: State<'_, RedisState>,
+    key: String,
+    score: f64,
+    member: String,
+) -> Result<(), String> {
+    let conn = state.get_active_connection().await?;
+    match conn {
+        RedisConnection::Standalone(mut con) => {
+            let _: () = redis::cmd("ZADD")
+                .arg(&key)
+                .arg(score)
+                .arg(&member)
+                .query_async(&mut con)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        RedisConnection::Cluster { mut cluster, .. } => {
+            let _: () = redis::cmd("ZADD")
+                .arg(&key)
+                .arg(score)
+                .arg(&member)
+                .query_async(&mut cluster)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_zset_member(
+    state: State<'_, RedisState>,
+    key: String,
+    member: String,
+) -> Result<u64, String> {
+    let conn = state.get_active_connection().await?;
+    match conn {
+        RedisConnection::Standalone(mut con) => {
+            let removed: u64 = redis::cmd("ZREM")
+                .arg(&key)
+                .arg(&member)
+                .query_async(&mut con)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(removed)
+        }
+        RedisConnection::Cluster { mut cluster, .. } => {
+            let removed: u64 = redis::cmd("ZREM")
+                .arg(&key)
+                .arg(&member)
+                .query_async(&mut cluster)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(removed)
+        }
+    }
 }
 
 #[tauri::command]

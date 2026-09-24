@@ -8,6 +8,7 @@
   import KeyDetail from '$lib/components/KeyDetail.svelte';
   import Console from '$lib/components/Console.svelte';
   import UpdateChecker from '$lib/components/UpdateChecker.svelte';
+  import Icons from '$lib/components/Icons.svelte';
 
   let showAddConnection = false;
   let rightPanel: 'detail' | 'console' = 'detail';
@@ -101,6 +102,7 @@
       </aside>
 
       <!-- Sidebar Resize Handle -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         class="resize-handle"
         class:active={isDragging === 'sidebar'}
@@ -114,6 +116,7 @@
       </section>
 
       <!-- Key Browser Resize Handle -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         class="resize-handle"
         class:active={isDragging === 'keybrowser'}
@@ -125,10 +128,16 @@
       <section class="panel-right">
         <div class="panel-tabs">
           <button class="panel-tab" class:active={rightPanel === 'detail'} on:click={() => rightPanel = 'detail'}>
-            📋 Key Detail
+            <span class="tab-inner">
+              <Icons name="key" size={13} />
+              <span>Key Detail</span>
+            </span>
           </button>
           <button class="panel-tab" class:active={rightPanel === 'console'} on:click={() => rightPanel = 'console'}>
-            ⌨ CLI Console
+            <span class="tab-inner">
+              <Icons name="terminal" size={13} />
+              <span>CLI Console</span>
+            </span>
           </button>
         </div>
         <div class="panel-content">
@@ -142,7 +151,11 @@
     </div>
 
     {#if showAddConnection}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="modal-overlay" on:click={() => showAddConnection = false}>
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="modal-content" on:click|stopPropagation>
           <div class="modal-header">
             <h3>Add Connection</h3>
@@ -232,6 +245,12 @@
     color: var(--accent);
     border-bottom-color: var(--accent);
     background: var(--bg-primary);
+  }
+  .tab-inner {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
   }
   .panel-content {
     flex: 1;

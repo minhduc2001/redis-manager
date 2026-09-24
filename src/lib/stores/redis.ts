@@ -1,5 +1,5 @@
 import { writable } from 'svelte/store';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import type {
   ConnectionInfo,
   ConnectionTab,
@@ -10,6 +10,20 @@ import type {
   SavedConnection,
   SearchMode,
 } from '$lib/types';
+
+export function isTauriEnvironment(): boolean {
+  if (typeof window === 'undefined') return false;
+  return isTauri() || '__TAURI_INTERNALS__' in window || '__TAURI__' in window;
+}
+
+export async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (!isTauriEnvironment()) {
+    throw new Error(
+      "Ứng dụng đang mở trên trình duyệt web thông thường (không có Rust backend). Vui lòng khởi động app bằng lệnh 'yarn tauri dev' trong terminal!"
+    );
+  }
+  return await invoke<T>(cmd, args);
+}
 
 // Connection state
 export const isConnected = writable(false);
@@ -81,6 +95,12 @@ function generateId() {
 // Actions
 export async function connectRedis(url: string, password?: string, name?: string) {
   try {
+    if (!isTauriEnvironment()) {
+      const msg = "Ứng dụng đang mở trên trình duyệt web thuần (không có Rust backend). Vui lòng khởi động app bằng lệnh 'yarn tauri dev' trong terminal!";
+      error.set(msg);
+      throw new Error(msg);
+    }
+
     let tabs: ConnectionTab[] = [];
     const unsubTabs = connectionTabs.subscribe((v) => (tabs = v));
     unsubTabs();
@@ -95,7 +115,7 @@ export async function connectRedis(url: string, password?: string, name?: string
     error.set(null);
     const id = generateId();
     const connName = name || url.split(',')[0].split(':')[0] || 'Redis';
-    const info = await invoke<ConnectionInfo>('connect_redis', {
+    const info = await tauriInvoke<ConnectionInfo>('connect_redis', {
       id,
       name: connName,
       url,
@@ -109,7 +129,7 @@ export async function connectRedis(url: string, password?: string, name?: string
 
     // Load server info
     try {
-      const sInfo = await invoke<ServerInfo>('get_server_info');
+      const sInfo = await tauriInvoke<ServerInfo>('get_server_info');
       serverInfo.set(sInfo);
     } catch (e) {
       console.warn('Failed to get server info:', e);
@@ -141,6 +161,8 @@ function saveActiveConnections() {
 }
 
 export async function autoReconnectLast(): Promise<boolean> {
+  if (!isTauriEnvironment()) return false;
+
   const savedConns: SavedConnection[] = loadSavedConnections();
   const activeNames: string[] = (() => {
     try {
@@ -173,7 +195,11 @@ export async function disconnectRedis(id?: string) {
     }
     if (!currentId) return;
 
-    await invoke('disconnect_redis', { id: currentId });
+    let activeId: string | null = null;
+    const unsubActive = activeConnectionId.subscribe((v) => (activeId = v));
+    unsubActive();
+
+    await tauriInvoke('disconnect_redis', { id: currentId });
     await refreshConnectionTabs();
     saveActiveConnections();
 
@@ -193,7 +219,7 @@ export async function disconnectRedis(id?: string) {
       keyDetail.set(null);
       error.set(null);
       localStorage.removeItem('redis-manager-active-names');
-    } else {
+    } else if (activeId === currentId) {
       const newActive = tabs.find((t) => t.is_active) || tabs[0];
       await switchConnection(newActive.id);
     }
@@ -215,12 +241,12 @@ export async function switchConnection(id: string) {
     selectedKeys.set(new Set());
     serverInfo.set(null);
 
-    await invoke('set_active_connection', { id });
+    await tauriInvoke('set_active_connection', { id });
     activeConnectionId.set(id);
     await refreshConnectionTabs();
 
     try {
-      const sInfo = await invoke<ServerInfo>('get_server_info');
+      const sInfo = await tauriInvoke<ServerInfo>('get_server_info');
       serverInfo.set(sInfo);
     } catch (e) {
       console.warn('Failed to get server info:', e);
@@ -238,8 +264,9 @@ export async function switchConnection(id: string) {
 }
 
 async function refreshConnectionTabs() {
+  if (!isTauriEnvironment()) return;
   try {
-    const tabs = await invoke<ConnectionTab[]>('get_connections');
+    const tabs = await tauriInvoke<ConnectionTab[]>('get_connections');
     connectionTabs.set(tabs);
   } catch (e) {
     console.warn('Failed to refresh connections:', e);
@@ -249,7 +276,11 @@ async function refreshConnectionTabs() {
 export async function testConnection(url: string, password?: string): Promise<boolean> {
   try {
     error.set(null);
-    return await invoke<boolean>('test_connection', {
+    if (!isTauriEnvironment()) {
+      error.set("Ứng dụng đang mở trên trình duyệt web thuần (không có Rust backend). Vui lòng khởi động app bằng lệnh 'yarn tauri dev' trong terminal!");
+      return false;
+    }
+    return await tauriInvoke<boolean>('test_connection', {
       url,
       password: password || null,
     });
@@ -278,7 +309,7 @@ export async function loadKeys(pattern?: string, reset = false) {
     const unsub2 = searchPattern.subscribe((v) => (currentPattern = v));
     unsub2();
 
-    const result = await invoke<ScanResult>('scan_keys', {
+    const result = await tauriInvoke<ScanResult>('scan_keys', {
       pattern: currentPattern,
       cursor: currentCursor,
       count: 200,
@@ -331,7 +362,7 @@ export async function searchKeys(pattern: string, mode: SearchMode) {
     // If exact mode without wildcards, attempt direct lookup first for instant result
     if (mode === 'exact' && !trimmed.includes('*') && !trimmed.includes('?')) {
       try {
-        const detail = await invoke<KeyDetail>('get_key_detail', { key: trimmed });
+        const detail = await tauriInvoke<KeyDetail>('get_key_detail', { key: trimmed });
         keys.set([{ name: detail.key, key_type: detail.key_type }]);
         scanCursor.set('0');
         hasMore.set(false);
@@ -342,7 +373,7 @@ export async function searchKeys(pattern: string, mode: SearchMode) {
     }
 
     // Full scan across cluster/standalone
-    const result = await invoke<ScanResult>('search_keys', {
+    const result = await tauriInvoke<ScanResult>('search_keys', {
       pattern: searchPat,
       maxResults: 1000,
     });
@@ -363,7 +394,7 @@ export async function loadKeyDetail(key: string) {
     isLoadingDetail.set(true);
     error.set(null);
     selectedKey.set(key);
-    const detail = await invoke<KeyDetail>('get_key_detail', { key });
+    const detail = await tauriInvoke<KeyDetail>('get_key_detail', { key });
     keyDetail.set(detail);
   } catch (e: any) {
     error.set(e.toString());
@@ -375,7 +406,7 @@ export async function loadKeyDetail(key: string) {
 export async function createKey(key: string, keyType: string, value: string, ttl?: number) {
   try {
     error.set(null);
-    await invoke('create_key', { key, keyType, value, ttl: ttl ?? null });
+    await tauriInvoke('create_key', { key, keyType, value, ttl: ttl ?? null });
     // Reload keys and select newly created key
     await loadKeys('*', true);
     await loadKeyDetail(key);
@@ -388,7 +419,7 @@ export async function createKey(key: string, keyType: string, value: string, ttl
 export async function deleteSelectedKeys(keysToDelete: string[]) {
   try {
     error.set(null);
-    await invoke<number>('delete_keys', { keys: keysToDelete });
+    await tauriInvoke<number>('delete_keys', { keys: keysToDelete });
     keys.update((list) => list.filter((k) => !keysToDelete.includes(k.name)));
     selectedKeys.set(new Set());
 
@@ -451,7 +482,7 @@ export function deselectKeys(names: string[]) {
 export async function updateKeyValue(key: string, value: string, ttl?: number) {
   try {
     error.set(null);
-    await invoke('set_key_value', { key, value, ttl: ttl ?? null });
+    await tauriInvoke('set_key_value', { key, value, ttl: ttl ?? null });
     await loadKeyDetail(key);
   } catch (e: any) {
     error.set(e.toString());
@@ -461,7 +492,7 @@ export async function updateKeyValue(key: string, value: string, ttl?: number) {
 export async function updateHashField(key: string, field: string, value: string) {
   try {
     error.set(null);
-    await invoke('set_hash_field', { key, field, value });
+    await tauriInvoke('set_hash_field', { key, field, value });
     await loadKeyDetail(key);
   } catch (e: any) {
     error.set(e.toString());
@@ -471,7 +502,7 @@ export async function updateHashField(key: string, field: string, value: string)
 export async function removeHashField(key: string, field: string) {
   try {
     error.set(null);
-    await invoke('delete_hash_field', { key, field });
+    await tauriInvoke('delete_hash_field', { key, field });
     await loadKeyDetail(key);
   } catch (e: any) {
     error.set(e.toString());
@@ -481,7 +512,7 @@ export async function removeHashField(key: string, field: string) {
 export async function updateKeyTtl(key: string, ttl: number) {
   try {
     error.set(null);
-    await invoke('set_key_ttl', { key, ttl });
+    await tauriInvoke('set_key_ttl', { key, ttl });
     await loadKeyDetail(key);
   } catch (e: any) {
     error.set(e.toString());
@@ -491,7 +522,7 @@ export async function updateKeyTtl(key: string, ttl: number) {
 export async function renameRedisKey(oldKey: string, newKey: string) {
   try {
     error.set(null);
-    await invoke('rename_key', { oldKey, newKey });
+    await tauriInvoke('rename_key', { oldKey, newKey });
     keys.update((list) =>
       list.map((k) => (k.name === oldKey ? { ...k, name: newKey } : k))
     );
@@ -505,7 +536,7 @@ export async function renameRedisKey(oldKey: string, newKey: string) {
 export async function addListItem(key: string, value: string) {
   try {
     error.set(null);
-    await invoke('add_list_item', { key, value });
+    await tauriInvoke('add_list_item', { key, value });
     await loadKeyDetail(key);
   } catch (e: any) {
     error.set(e.toString());
@@ -515,7 +546,47 @@ export async function addListItem(key: string, value: string) {
 export async function addSetMember(key: string, value: string) {
   try {
     error.set(null);
-    await invoke('add_set_member', { key, value });
+    await tauriInvoke('add_set_member', { key, value });
+    await loadKeyDetail(key);
+  } catch (e: any) {
+    error.set(e.toString());
+  }
+}
+
+export async function deleteListItem(key: string, value: string, count?: number) {
+  try {
+    error.set(null);
+    await tauriInvoke('delete_list_item', { key, value, count: count ?? 1 });
+    await loadKeyDetail(key);
+  } catch (e: any) {
+    error.set(e.toString());
+  }
+}
+
+export async function deleteSetMember(key: string, member: string) {
+  try {
+    error.set(null);
+    await tauriInvoke('delete_set_member', { key, member });
+    await loadKeyDetail(key);
+  } catch (e: any) {
+    error.set(e.toString());
+  }
+}
+
+export async function addZSetMember(key: string, score: number, member: string) {
+  try {
+    error.set(null);
+    await tauriInvoke('add_zset_member', { key, score, member });
+    await loadKeyDetail(key);
+  } catch (e: any) {
+    error.set(e.toString());
+  }
+}
+
+export async function deleteZSetMember(key: string, member: string) {
+  try {
+    error.set(null);
+    await tauriInvoke('delete_zset_member', { key, member });
     await loadKeyDetail(key);
   } catch (e: any) {
     error.set(e.toString());

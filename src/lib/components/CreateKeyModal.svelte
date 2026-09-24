@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createKey } from '$lib/stores/redis';
+  import Icons from './Icons.svelte';
 
   export let onClose: () => void = () => {};
 
@@ -98,7 +99,9 @@
   <div class="modal-box animate-fade" on:click|stopPropagation>
     <div class="modal-header">
       <div class="modal-title-wrap">
-        <span class="icon-sparkle">✨</span>
+        <span class="icon-sparkle" style="color: var(--accent); display: flex;">
+          <Icons name="sparkle" size={16} />
+        </span>
         <h3>Create New Key</h3>
       </div>
       <button class="btn-close" on:click={onClose} title="Close (Esc)">✕</button>
@@ -108,6 +111,7 @@
       <!-- Key Name -->
       <div class="form-group">
         <label for="key-name">Key Name <span class="required">*</span></label>
+        <!-- svelte-ignore a11y_autofocus -->
         <input
           id="key-name"
           class="input input-mono"
@@ -119,7 +123,7 @@
 
       <!-- Key Type -->
       <div class="form-group">
-        <label>Data Type</label>
+        <span class="label-text">Data Type</span>
         <div class="type-selector">
           {#each types as t}
             <button
@@ -209,11 +213,13 @@
 
       <div class="modal-footer">
         <button type="button" class="btn" on:click={onClose}>Cancel</button>
-        <button type="submit" class="btn btn-primary" disabled={isSubmitting || !keyName.trim()}>
+        <button type="submit" class="btn btn-primary" disabled={isSubmitting || !keyName.trim()} style="display: inline-flex; align-items: center; gap: 6px;">
           {#if isSubmitting}
-            <span class="animate-spin">⟳</span> Creating...
+            <span class="animate-spin" style="display: flex;"><Icons name="refresh" size={13} /></span>
+            <span>Creating...</span>
           {:else}
-            ✨ Create Key
+            <Icons name="plus" size={13} />
+            <span>Create Key</span>
           {/if}
         </button>
       </div>
@@ -287,7 +293,7 @@
     flex-direction: column;
     gap: 6px;
   }
-  .form-group label {
+  .form-group label, .label-text {
     font-size: 11px;
     font-weight: 600;
     color: var(--text-secondary);

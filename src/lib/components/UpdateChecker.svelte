@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { check } from '@tauri-apps/plugin-updater';
   import { relaunch } from '@tauri-apps/plugin-process';
+  import { isTauriEnvironment } from '$lib/stores/redis';
 
   let updateAvailable = false;
   let updateVersion = '';
@@ -23,6 +24,7 @@
   });
 
   async function checkForUpdates() {
+    if (!isTauriEnvironment()) return;
     try {
       checkError = '';
       const update = await check();

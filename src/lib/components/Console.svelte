@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/core';
+  import { tauriInvoke } from '$lib/stores/redis';
+  import Icons from './Icons.svelte';
 
   interface HistoryEntry {
     command: string;
@@ -25,7 +26,7 @@
     executing = true;
 
     try {
-      const result = await invoke<string>('execute_command', { command: cmd });
+      const result = await tauriInvoke<string>('execute_command', { command: cmd });
       history = [...history, {
         command: cmd,
         result,
@@ -90,7 +91,10 @@
 
 <div class="console">
   <div class="console-header">
-    <span class="console-title">⌨ Redis CLI</span>
+    <span class="console-title" style="display: inline-flex; align-items: center; gap: 6px;">
+      <Icons name="terminal" size={14} />
+      <span>Redis CLI</span>
+    </span>
     <div class="console-actions">
       <button class="btn btn-sm" on:click={clearHistory} disabled={history.length === 0}>Clear</button>
     </div>
@@ -123,7 +127,8 @@
 
     {#if executing}
       <div class="executing">
-        <span class="animate-spin">⟳</span> Executing...
+        <span class="animate-spin" style="display: flex;"><Icons name="refresh" size={13} /></span>
+        <span>Executing...</span>
       </div>
     {/if}
   </div>
@@ -137,8 +142,8 @@
       placeholder="Type a Redis command..."
       disabled={executing}
     />
-    <button class="btn btn-sm btn-primary" on:click={executeCommand} disabled={executing || !inputValue.trim()}>
-      ▶
+    <button class="btn btn-sm btn-primary" on:click={executeCommand} disabled={executing || !inputValue.trim()} title="Execute command (Enter)">
+      <Icons name="play" size={11} />
     </button>
   </div>
 </div>

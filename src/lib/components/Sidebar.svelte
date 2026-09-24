@@ -10,12 +10,15 @@
     switchConnection,
     error,
   } from '$lib/stores/redis';
+  import Icons from './Icons.svelte';
+  import AboutModal from './AboutModal.svelte';
 
   export let onAddConnection: () => void = () => {};
 
   let confirmDisconnectId: string | null = null;
   let confirmDisconnectName: string = '';
   let appVersion = '';
+  let showAboutModal = false;
 
   onMount(async () => {
     try {
@@ -75,11 +78,7 @@
   <div class="sidebar-header">
     <div class="app-logo">
       <div class="logo-icon-wrap">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-          <path d="M12 2L2 7v10l10 5 10-5V7L12 2z" stroke="var(--accent)" stroke-width="1.8" fill="rgba(0,212,255,0.12)"/>
-          <path d="M12 22V12M2 7l10 5 10-5" stroke="var(--accent)" stroke-width="1.8"/>
-          <circle cx="12" cy="12" r="2.5" fill="var(--accent)"/>
-        </svg>
+        <img src="/favicon.png" alt="Redis Manager" class="app-icon-img" />
       </div>
       <div class="logo-text-wrap">
         <span class="app-title">Redis Manager</span>
@@ -90,104 +89,118 @@
     </div>
   </div>
 
-  <!-- Connections Section -->
-  {#if $connectionTabs.length > 0}
-    <div class="conn-section">
-      <div class="section-header">
-        <div class="section-title-wrap">
-          <span class="section-label">Connections</span>
-          <span class="conn-count">{$connectionTabs.length}</span>
-        </div>
-        <button class="btn-add" on:click={onAddConnection} title="Add another Redis connection">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-            <path d="M12 5v14M5 12h14"/>
-          </svg>
-        </button>
-      </div>
-
-      <div class="conn-list">
-        {#each $connectionTabs as tab (tab.id)}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div
-            class="conn-card"
-            class:active={tab.is_active}
-            on:click={() => handleSwitch(tab.id)}
-          >
-            <div class="card-indicator" style="background: {tab.is_active ? getEnvColor(tab.name) : 'transparent'}"></div>
-            <div class="card-content">
-              <div class="card-top">
-                <span
-                  class="card-dot"
-                  class:active={tab.is_active}
-                  style="--dot-color: {getEnvColor(tab.name)}"
-                ></span>
-                <span class="card-name" title={tab.name}>{tab.name}</span>
-                <span class="card-mode badge {tab.mode === 'cluster' ? 'badge-hash' : 'badge-string'}">
-                  {tab.mode === 'cluster' ? 'CLUSTER' : 'STANDALONE'}
-                </span>
-              </div>
-              <div class="card-bottom">
-                <span class="card-status">{tab.is_active ? '● Active' : 'Connected'}</span>
-                <span class="card-url truncate" title={tab.url}>{tab.url}</span>
-              </div>
-            </div>
-            <button
-              class="card-close"
-              on:click|stopPropagation={() => askDisconnect(tab.id, tab.name)}
-              title="Disconnect"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                <path d="M18 6L6 18M6 6l12 12"/>
-              </svg>
-            </button>
+  <div class="sidebar-body">
+    <!-- Connections Section -->
+    {#if $connectionTabs.length > 0}
+      <div class="conn-section">
+        <div class="section-header">
+          <div class="section-title-wrap">
+            <span class="section-label">Connections</span>
+            <span class="conn-count">{$connectionTabs.length}</span>
           </div>
-        {/each}
-      </div>
-    </div>
-  {/if}
+          <button class="btn-add" on:click={onAddConnection} title="Add another Redis connection">
+            <Icons name="plus" size={13} />
+          </button>
+        </div>
 
-  <!-- Server Info Metrics -->
-  {#if $isConnected && $serverInfo}
-    <div class="server-info animate-fade">
-      <div class="info-header">
-        <span class="info-title">SERVER STATS</span>
-        <span class="badge { $serverInfo.mode === 'cluster' ? 'badge-hash' : 'badge-string' }">
-          {$serverInfo.mode.toUpperCase()}
-        </span>
+        <div class="conn-list">
+          {#each $connectionTabs as tab (tab.id)}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+              class="conn-card"
+              class:active={tab.is_active}
+              on:click={() => handleSwitch(tab.id)}
+            >
+              <div class="card-indicator" style="background: {tab.is_active ? getEnvColor(tab.name) : 'transparent'}"></div>
+              <div class="card-content">
+                <div class="card-top">
+                  <span
+                    class="card-dot"
+                    class:active={tab.is_active}
+                    style="--dot-color: {getEnvColor(tab.name)}"
+                  ></span>
+                  <span class="card-name" title={tab.name}>{tab.name}</span>
+                  <span class="card-mode badge {tab.mode === 'cluster' ? 'badge-hash' : 'badge-string'}">
+                    {tab.mode === 'cluster' ? 'CLUSTER' : 'STANDALONE'}
+                  </span>
+                </div>
+                <div class="card-bottom">
+                  <span class="card-status">{tab.is_active ? '● Active' : 'Connected'}</span>
+                  <span class="card-url truncate" title={tab.url}>{tab.url}</span>
+                </div>
+              </div>
+              <button
+                class="card-close"
+                on:click|stopPropagation={() => askDisconnect(tab.id, tab.name)}
+                title="Disconnect"
+              >
+                <Icons name="close" size={12} />
+              </button>
+            </div>
+          {/each}
+        </div>
       </div>
+    {/if}
 
-      <div class="info-grid">
-        <div class="info-item">
-          <span class="info-label">Version</span>
-          <span class="info-value mono">{$serverInfo.version}</span>
+    <!-- Server Info Metrics -->
+    {#if $isConnected && $serverInfo}
+      <div class="server-info animate-fade">
+        <div class="info-header">
+          <span class="info-title">SERVER STATS</span>
+          <span class="badge { $serverInfo.mode === 'cluster' ? 'badge-hash' : 'badge-string' }">
+            {$serverInfo.mode.toUpperCase()}
+          </span>
         </div>
-        <div class="info-item">
-          <span class="info-label">Memory</span>
-          <span class="info-value mono text-accent">{$serverInfo.used_memory_human}</span>
-        </div>
-        <div class="info-item">
-          <span class="info-label">Total Keys</span>
-          <span class="info-value mono text-success">{formattedTotalKeys}</span>
-        </div>
-        <div class="info-item">
-          <span class="info-label">Clients</span>
-          <span class="info-value mono">{$serverInfo.connected_clients}</span>
-        </div>
-        <div class="info-item full-width">
-          <span class="info-label">Uptime</span>
-          <span class="info-value mono">{uptime}</span>
+
+        <div class="info-grid">
+          <div class="info-item">
+            <span class="info-label">Version</span>
+            <span class="info-value mono">{$serverInfo.version}</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">Memory</span>
+            <span class="info-value mono text-accent">{$serverInfo.used_memory_human}</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">Total Keys</span>
+            <span class="info-value mono text-success">{formattedTotalKeys}</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">Clients</span>
+            <span class="info-value mono">{$serverInfo.connected_clients}</span>
+          </div>
+          <div class="info-item full-width">
+            <span class="info-label">Uptime</span>
+            <span class="info-value mono">{uptime}</span>
+          </div>
         </div>
       </div>
-    </div>
-  {/if}
+    {/if}
 
-  {#if $error}
-    <div class="error-banner animate-fade">
-      <div class="error-msg truncate">⚠ {$error}</div>
-      <button class="btn btn-sm btn-icon" on:click={() => error.set(null)}>✕</button>
-    </div>
-  {/if}
+    {#if $error}
+      <div class="error-banner animate-fade">
+        <div class="error-msg truncate">⚠ {$error}</div>
+        <button class="btn btn-sm btn-icon" on:click={() => error.set(null)}>✕</button>
+      </div>
+    {/if}
+  </div>
+
+  <!-- Footer with author information -->
+  <div class="sidebar-footer">
+    <button class="btn-author" on:click={() => showAboutModal = true} title="Xem thông tin tác giả">
+      <div class="author-mini-card">
+        <div class="author-avatar-mini">MD</div>
+        <div class="author-meta-mini">
+          <span class="author-name-text">Ngô Minh Đức</span>
+          <span class="author-sub-text">Tác giả • About</span>
+        </div>
+      </div>
+      <div class="author-info-icon">
+        <Icons name="info" size={14} />
+      </div>
+    </button>
+  </div>
 
   <!-- Confirm Disconnect Modal -->
   {#if confirmDisconnectId}
@@ -205,6 +218,10 @@
       </div>
     </div>
   {/if}
+
+  {#if showAboutModal}
+    <AboutModal onClose={() => showAboutModal = false} />
+  {/if}
 </div>
 
 <style>
@@ -214,7 +231,14 @@
     height: 100%;
     background: var(--bg-secondary);
     border-right: 1px solid var(--border-primary);
+    overflow: hidden;
+  }
+
+  .sidebar-body {
+    flex: 1;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
   }
 
   .sidebar-header {
@@ -231,6 +255,13 @@
     display: flex;
     align-items: center;
     justify-content: center;
+  }
+  .app-icon-img {
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    object-fit: cover;
+    box-shadow: 0 2px 8px rgba(0, 212, 255, 0.25);
   }
   .logo-text-wrap {
     display: flex;
@@ -504,5 +535,75 @@
     display: flex;
     gap: var(--gap-sm);
     justify-content: flex-end;
+  }
+
+  /* Footer with author info */
+  .sidebar-footer {
+    padding: 8px var(--gap-md);
+    border-top: 1px solid var(--border-primary);
+    background: var(--bg-primary);
+    flex-shrink: 0;
+  }
+
+  .btn-author {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-secondary);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+  .btn-author:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-accent);
+  }
+
+  .author-mini-card {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    text-align: left;
+  }
+  .author-avatar-mini {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #ef4444, #38bdf8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: #fff;
+    flex-shrink: 0;
+    box-shadow: 0 1px 4px rgba(0, 212, 255, 0.3);
+  }
+  .author-meta-mini {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+  }
+  .author-name-text {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .author-sub-text {
+    font-size: 9px;
+    color: var(--text-muted);
+  }
+  .author-info-icon {
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    transition: color var(--transition-fast);
+  }
+  .btn-author:hover .author-info-icon {
+    color: var(--accent);
   }
 </style>

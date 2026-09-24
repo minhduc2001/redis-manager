@@ -33,7 +33,11 @@ pub fn run() {
             set_key_ttl,
             delete_hash_field,
             add_list_item,
+            delete_list_item,
             add_set_member,
+            delete_set_member,
+            add_zset_member,
+            delete_zset_member,
             create_key,
             execute_command,
         ])
