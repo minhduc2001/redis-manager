@@ -188,35 +188,53 @@ impl RedisState {
             }
             RedisConnection::Cluster { masters, .. } => {
                 let mut guard = masters.lock().await;
-                // Test if cached master connections are still alive
-                let mut valid_conns = Vec::new();
-                for (addr, mut con) in guard.iter().cloned() {
-                    let ping: Result<String, _> = redis::cmd("PING").query_async(&mut con).await;
-                    if ping.is_ok() {
-                        valid_conns.push((addr, con));
+                // Fast path: reuse cached multiplexed master connections immediately (0ms overhead)
+                if !guard.is_empty() && guard.len() >= entry.master_nodes.len().max(1) {
+                    return Ok(guard.clone());
+                }
+
+                // Connect to all master nodes in parallel
+                let connect_tasks = entry.master_nodes.iter().map(|node| {
+                    let n = node.clone();
+                    let seeds = entry.seed_hosts.clone();
+                    let pwd = entry.password.clone();
+                    async move {
+                        connect_master_node(&n, &seeds, pwd.as_deref())
+                            .await
+                            .ok()
+                            .map(|con| (n, con))
                     }
-                }
+                });
 
-                if !valid_conns.is_empty() && valid_conns.len() >= entry.master_nodes.len().max(1) {
-                    *guard = valid_conns.clone();
-                    return Ok(valid_conns);
-                }
+                let mut conns: Vec<(String, MultiplexedConnection)> = futures::future::join_all(connect_tasks)
+                    .await
+                    .into_iter()
+                    .flatten()
+                    .collect();
 
-                // Reconnect missing or all master nodes
-                let mut conns = Vec::new();
-                for node in &entry.master_nodes {
-                    if let Ok(con) = connect_master_node(node, &entry.seed_hosts, entry.password.as_deref()).await {
-                        conns.push((node.clone(), con));
-                    }
-                }
-
-                // If no master connected from announced list, fallback to user seed URLs
+                // If no master connected from announced list, fallback to user seed URLs in parallel
                 if conns.is_empty() {
-                    for seed in entry.url.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                        if let Ok(con) = connect_master_node(seed, &entry.seed_hosts, entry.password.as_deref()).await {
-                            conns.push((seed.to_string(), con));
+                    let seed_urls: Vec<String> = entry
+                        .url
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    let fallback_tasks = seed_urls.into_iter().map(|seed| {
+                        let seeds = entry.seed_hosts.clone();
+                        let pwd = entry.password.clone();
+                        async move {
+                            connect_master_node(&seed, &seeds, pwd.as_deref())
+                                .await
+                                .ok()
+                                .map(|con| (seed, con))
                         }
-                    }
+                    });
+                    conns = futures::future::join_all(fallback_tasks)
+                        .await
+                        .into_iter()
+                        .flatten()
+                        .collect();
                 }
 
                 if conns.is_empty() {
@@ -225,6 +243,15 @@ impl RedisState {
 
                 *guard = conns.clone();
                 Ok(conns)
+            }
+        }
+    }
+
+    pub async fn invalidate_master_connections(&self) {
+        if let Ok(entry) = self.get_active_entry().await {
+            if let RedisConnection::Cluster { masters, .. } = &entry.connection {
+                let mut guard = masters.lock().await;
+                guard.clear();
             }
         }
     }

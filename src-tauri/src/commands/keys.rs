@@ -54,6 +54,7 @@ local pat = ARGV[2]
 local target = tonumber(ARGV[3]) or 500
 local hint = tonumber(ARGV[4]) or 10000
 local max_iter = tonumber(ARGV[5]) or 60
+local filter_type = ARGV[6] or ''
 local keys = {}
 local types = {}
 local seen = {}
@@ -61,19 +62,38 @@ local iter = 0
 
 repeat
     iter = iter + 1
-    local res = redis.call('SCAN', cur, 'MATCH', pat, 'COUNT', hint)
+    local res
+    local used_scan_type = false
+    if filter_type ~= '' then
+        local ok, r = pcall(redis.call, 'SCAN', cur, 'MATCH', pat, 'COUNT', hint, 'TYPE', filter_type)
+        if ok then
+            res = r
+            used_scan_type = true
+        else
+            res = redis.call('SCAN', cur, 'MATCH', pat, 'COUNT', hint)
+        end
+    else
+        res = redis.call('SCAN', cur, 'MATCH', pat, 'COUNT', hint)
+    end
     cur = tostring(res[1])
     local batch = res[2]
     for i = 1, #batch do
         local k = batch[i]
         if not seen[k] then
             seen[k] = true
-            table.insert(keys, k)
-            local t = redis.call('TYPE', k)
-            local ts = (type(t) == 'table' and (t.ok or t[1])) or tostring(t)
-            table.insert(types, ts)
-            if #keys >= target then
-                break
+            local ts
+            if used_scan_type then
+                ts = filter_type
+            else
+                local t = redis.call('TYPE', k)
+                ts = (type(t) == 'table' and (t.ok or t[1])) or tostring(t)
+            end
+            if filter_type == '' or ts == filter_type then
+                table.insert(keys, k)
+                table.insert(types, ts)
+                if #keys >= target then
+                    break
+                end
             end
         end
     end
@@ -82,6 +102,136 @@ until cur == '0' or #keys >= target or iter >= max_iter
 return {cur, keys, types}
 "#;
 
+const LUA_KEY_DETAIL: &str = r#"
+local key = KEYS[1]
+local limit = tonumber(ARGV[1]) or 500
+local t = redis.call('TYPE', key)
+local ktype = (type(t) == 'table' and (t.ok or t[1])) or tostring(t)
+if ktype == 'none' then
+    return {'none', -2, 0, {}}
+end
+local ttl = redis.call('TTL', key)
+if ktype == 'string' then
+    local val = redis.call('GET', key)
+    local size = val and #val or 0
+    return {'string', ttl, size, {val or ''}}
+elseif ktype == 'hash' then
+    local size = redis.call('HLEN', key)
+    local raw = {}
+    if size > 0 then
+        if size <= limit then
+            raw = redis.call('HGETALL', key)
+        else
+            raw = redis.call('HSCAN', key, '0', 'COUNT', limit)[2]
+        end
+    end
+    return {'hash', ttl, size, raw}
+elseif ktype == 'list' then
+    local size = redis.call('LLEN', key)
+    local raw = {}
+    if size > 0 then
+        raw = redis.call('LRANGE', key, 0, limit - 1)
+    end
+    return {'list', ttl, size, raw}
+elseif ktype == 'set' then
+    local size = redis.call('SCARD', key)
+    local raw = {}
+    if size > 0 then
+        if size <= limit then
+            raw = redis.call('SMEMBERS', key)
+        else
+            raw = redis.call('SSCAN', key, '0', 'COUNT', limit)[2]
+        end
+    end
+    return {'set', ttl, size, raw}
+elseif ktype == 'zset' then
+    local size = redis.call('ZCARD', key)
+    local raw = {}
+    if size > 0 then
+        raw = redis.call('ZRANGE', key, 0, limit - 1, 'WITHSCORES')
+    end
+    return {'zset', ttl, size, raw}
+else
+    return {ktype, ttl, 0, {}}
+end
+"#;
+
+fn bytes_to_str(b: Vec<u8>) -> String {
+    match String::from_utf8(b) {
+        Ok(s) => s,
+        Err(err) => String::from_utf8_lossy(&err.into_bytes()).to_string(),
+    }
+}
+
+async fn get_key_detail_lua<C: redis::aio::ConnectionLike>(
+    con: &mut C,
+    key: &str,
+) -> Result<KeyDetail, String> {
+    let (key_type, ttl, size, raw_items): (String, i64, usize, Vec<Vec<u8>>) = redis::cmd("EVAL")
+        .arg(LUA_KEY_DETAIL)
+        .arg(1)
+        .arg(key)
+        .arg(500)
+        .query_async(con)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if key_type == "none" {
+        return Err(format!("Key '{}' does not exist or has expired", key));
+    }
+
+    let value = match key_type.as_str() {
+        "string" => {
+            let val_str = raw_items
+                .into_iter()
+                .next()
+                .map(bytes_to_str)
+                .unwrap_or_default();
+            KeyValue::String(val_str)
+        }
+        "hash" => {
+            let mut fields = Vec::with_capacity(raw_items.len() / 2);
+            let mut iter = raw_items.into_iter();
+            while let (Some(f), Some(v)) = (iter.next(), iter.next()) {
+                fields.push(HashField {
+                    field: bytes_to_str(f),
+                    value: bytes_to_str(v),
+                });
+            }
+            KeyValue::Hash(fields)
+        }
+        "list" => {
+            let items = raw_items.into_iter().map(bytes_to_str).collect();
+            KeyValue::List(items)
+        }
+        "set" => {
+            let members = raw_items.into_iter().map(bytes_to_str).collect();
+            KeyValue::Set(members)
+        }
+        "zset" => {
+            let mut zset = Vec::with_capacity(raw_items.len() / 2);
+            let mut iter = raw_items.into_iter();
+            while let (Some(m), Some(s)) = (iter.next(), iter.next()) {
+                let score = bytes_to_str(s).parse::<f64>().unwrap_or(0.0);
+                zset.push(ZSetMember {
+                    member: bytes_to_str(m),
+                    score,
+                });
+            }
+            KeyValue::ZSet(zset)
+        }
+        _ => KeyValue::Unknown(format!("Unsupported type: {}", key_type)),
+    };
+
+    Ok(KeyDetail {
+        key: key.to_string(),
+        key_type,
+        ttl,
+        value,
+        size,
+    })
+}
+
 async fn scan_node_lua(
     con: &mut redis::aio::MultiplexedConnection,
     cursor: u64,
@@ -89,6 +239,7 @@ async fn scan_node_lua(
     target: usize,
     scan_hint: u64,
     max_iter: usize,
+    filter_type: &str,
 ) -> Result<(u64, Vec<KeyEntry>), String> {
     let (next_cur_str, raw_keys, raw_types): (String, Vec<String>, Vec<String>) = redis::cmd("EVAL")
         .arg(LUA_SCAN)
@@ -98,6 +249,7 @@ async fn scan_node_lua(
         .arg(target)
         .arg(scan_hint)
         .arg(max_iter)
+        .arg(filter_type)
         .query_async(con)
         .await
         .map_err(|e| e.to_string())?;
@@ -119,6 +271,7 @@ async fn scan_node_native(
     target: usize,
     scan_hint: u64,
     max_iter: usize,
+    filter_type: &str,
 ) -> Result<(u64, Vec<KeyEntry>), String> {
     let mut cur = cursor;
     let mut raw_keys = Vec::new();
@@ -127,15 +280,27 @@ async fn scan_node_native(
 
     loop {
         iterations += 1;
-        let (new_cur, batch): (u64, Vec<String>) = redis::cmd("SCAN")
-            .arg(cur)
-            .arg("MATCH")
-            .arg(pattern)
-            .arg("COUNT")
-            .arg(scan_hint)
-            .query_async(con)
-            .await
-            .map_err(|e| e.to_string())?;
+        let mut cmd = redis::cmd("SCAN");
+        cmd.arg(cur).arg("MATCH").arg(pattern).arg("COUNT").arg(scan_hint);
+        if !filter_type.is_empty() {
+            cmd.arg("TYPE").arg(filter_type);
+        }
+
+        let (new_cur, batch): (u64, Vec<String>) = match cmd.query_async(con).await {
+            Ok(res) => res,
+            Err(_) if !filter_type.is_empty() => {
+                redis::cmd("SCAN")
+                    .arg(cur)
+                    .arg("MATCH")
+                    .arg(pattern)
+                    .arg("COUNT")
+                    .arg(scan_hint)
+                    .query_async(con)
+                    .await
+                    .map_err(|e| e.to_string())?
+            }
+            Err(e) => return Err(e.to_string()),
+        };
 
         for k in batch {
             if seen.insert(k.clone()) {
@@ -163,7 +328,9 @@ async fn scan_node_native(
                 .unwrap_or_else(|_| vec!["unknown".to_string(); chunk.len()]);
 
             for (name, key_type) in chunk.iter().cloned().zip(types) {
-                entries.push(KeyEntry { name, key_type });
+                if filter_type.is_empty() || key_type == filter_type {
+                    entries.push(KeyEntry { name, key_type });
+                }
             }
         }
     }
@@ -178,13 +345,14 @@ async fn scan_single_node(
     target: usize,
     scan_hint: u64,
     max_iter: usize,
+    filter_type: &str,
 ) -> Result<(u64, Vec<KeyEntry>), String> {
     // Try ultra-fast server-side Lua scan first (1 network round-trip instead of 60)
-    match scan_node_lua(con, cursor, pattern, target, scan_hint, max_iter).await {
+    match scan_node_lua(con, cursor, pattern, target, scan_hint, max_iter, filter_type).await {
         Ok(res) => Ok(res),
         Err(_) => {
             // Graceful fallback to native SCAN pipeline
-            scan_node_native(con, cursor, pattern, target, scan_hint, max_iter).await
+            scan_node_native(con, cursor, pattern, target, scan_hint, max_iter, filter_type).await
         }
     }
 }
@@ -195,8 +363,14 @@ pub async fn scan_keys(
     pattern: String,
     cursor: String,
     count: u64,
+    key_type: Option<String>,
 ) -> Result<ScanResult, String> {
     let pattern = if pattern.trim().is_empty() { "*".to_string() } else { pattern };
+    let filter_type = key_type
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    let filter_type = if filter_type == "all" { String::new() } else { filter_type };
     let is_first_run = cursor == "0" || cursor.trim().is_empty();
 
     // Fast path: if pattern has no wildcards (* or ?), perform instant O(1) lookup
@@ -211,7 +385,7 @@ pub async fn scan_keys(
                 }
             };
             if let Ok(ktype) = type_check {
-                if ktype != "none" {
+                if ktype != "none" && (filter_type.is_empty() || ktype == filter_type) {
                     return Ok(ScanResult {
                         cursor: "0".to_string(),
                         keys: vec![KeyEntry {
@@ -233,7 +407,7 @@ pub async fn scan_keys(
         let target = count.max(500) as usize;
         let scan_hint = 10000u64.max(count * 5);
 
-        let (next_cursor, entries) = scan_single_node(&mut con, cur, &pattern, target, scan_hint, 60).await?;
+        let (next_cursor, entries) = scan_single_node(&mut con, cur, &pattern, target, scan_hint, 60, &filter_type).await?;
 
         Ok(ScanResult {
             cursor: next_cursor.to_string(),
@@ -265,13 +439,14 @@ pub async fn scan_keys(
         for (idx, (_addr, mut con)) in master_conns.into_iter().enumerate() {
             let cur = node_cursors[idx];
             let pat = pattern.clone();
+            let ft = filter_type.clone();
             node_tasks.push(async move {
                 if !is_first_run && cur == 0 {
-                    return (idx, 0u64, Vec::new());
+                    return (idx, 0u64, Vec::new(), false);
                 }
-                match scan_single_node(&mut con, cur, &pat, per_node_target, scan_hint, 60).await {
-                    Ok((next_cur, entries)) => (idx, next_cur, entries),
-                    Err(_) => (idx, cur, Vec::new()),
+                match scan_single_node(&mut con, cur, &pat, per_node_target, scan_hint, 60, &ft).await {
+                    Ok((next_cur, entries)) => (idx, next_cur, entries, false),
+                    Err(_) => (idx, cur, Vec::new(), true),
                 }
             });
         }
@@ -281,14 +456,22 @@ pub async fn scan_keys(
 
         let mut all_entries = Vec::new();
         let mut seen = HashSet::new();
+        let mut had_node_err = false;
 
-        for (idx, next_cur, entries) in results {
+        for (idx, next_cur, entries, is_err) in results {
+            if is_err {
+                had_node_err = true;
+            }
             node_cursors[idx] = next_cur;
             for entry in entries {
                 if seen.insert(entry.name.clone()) {
                     all_entries.push(entry);
                 }
             }
+        }
+
+        if had_node_err {
+            state.invalidate_master_connections().await;
         }
 
         let all_done = node_cursors.iter().all(|&c| c == 0);
@@ -315,8 +498,9 @@ pub async fn search_keys(
     state: State<'_, RedisState>,
     pattern: String,
     max_results: Option<u64>,
+    key_type: Option<String>,
 ) -> Result<ScanResult, String> {
-    scan_keys(state, pattern, "0".to_string(), max_results.unwrap_or(1000)).await
+    scan_keys(state, pattern, "0".to_string(), max_results.unwrap_or(1000), key_type).await
 }
 
 
@@ -328,8 +512,20 @@ pub async fn get_key_detail(
     let conn = state.get_active_connection().await?;
 
     match conn {
-        RedisConnection::Standalone(mut con) => get_key_detail_impl(&mut con, &key).await,
-        RedisConnection::Cluster { mut cluster, .. } => get_key_detail_cluster(&mut cluster, &key).await,
+        RedisConnection::Standalone(mut con) => {
+            match get_key_detail_lua(&mut con, &key).await {
+                Ok(detail) => Ok(detail),
+                Err(e) if e.contains("does not exist") => Err(e),
+                Err(_) => get_key_detail_impl(&mut con, &key).await,
+            }
+        }
+        RedisConnection::Cluster { mut cluster, .. } => {
+            match get_key_detail_lua(&mut cluster, &key).await {
+                Ok(detail) => Ok(detail),
+                Err(e) if e.contains("does not exist") => Err(e),
+                Err(_) => get_key_detail_cluster(&mut cluster, &key).await,
+            }
+        }
     }
 }
 
@@ -337,8 +533,9 @@ async fn get_key_detail_impl(
     con: &mut redis::aio::MultiplexedConnection,
     key: &str,
 ) -> Result<KeyDetail, String> {
-    let key_type: String = redis::cmd("TYPE")
-        .arg(key)
+    let mut pipe = redis::pipe();
+    pipe.cmd("TYPE").arg(key).cmd("TTL").arg(key);
+    let (key_type, ttl): (String, i64) = pipe
         .query_async(con)
         .await
         .map_err(|e| e.to_string())?;
@@ -347,26 +544,37 @@ async fn get_key_detail_impl(
         return Err(format!("Key '{}' does not exist or has expired", key));
     }
 
-    let ttl: i64 = con.ttl(key).await.map_err(|e| e.to_string())?;
-
     let (value, size) = match key_type.as_str() {
         "string" => {
             let raw: Vec<u8> = con.get(key).await.map_err(|e| e.to_string())?;
             let s = raw.len();
-            let val_str = match String::from_utf8(raw) {
-                Ok(str_val) => str_val,
-                Err(err) => String::from_utf8_lossy(&err.into_bytes()).to_string(),
-            };
-            (KeyValue::String(val_str), s)
+            (KeyValue::String(bytes_to_str(raw)), s)
         }
         "hash" => {
-            let raw_map: Vec<(Vec<u8>, Vec<u8>)> = con.hgetall(key).await.map_err(|e| e.to_string())?;
-            let s = raw_map.len();
+            let s: usize = con.hlen(key).await.map_err(|e| e.to_string())?;
+            let raw_map: Vec<(Vec<u8>, Vec<u8>)> = if s <= 500 {
+                con.hgetall(key).await.map_err(|e| e.to_string())?
+            } else {
+                let (_cur, flat): (u64, Vec<Vec<u8>>) = redis::cmd("HSCAN")
+                    .arg(key)
+                    .arg(0)
+                    .arg("COUNT")
+                    .arg(500)
+                    .query_async(con)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let mut pairs = Vec::with_capacity(flat.len() / 2);
+                let mut iter = flat.into_iter();
+                while let (Some(f), Some(v)) = (iter.next(), iter.next()) {
+                    pairs.push((f, v));
+                }
+                pairs
+            };
             let fields: Vec<HashField> = raw_map
                 .into_iter()
                 .map(|(f, v)| HashField {
-                    field: String::from_utf8(f.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&f).to_string()),
-                    value: String::from_utf8(v.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&v).to_string()),
+                    field: bytes_to_str(f),
+                    value: bytes_to_str(v),
                 })
                 .collect();
             (KeyValue::Hash(fields), s)
@@ -376,22 +584,28 @@ async fn get_key_detail_impl(
             let limit = std::cmp::min(len, 500);
             let items: Vec<String> = if limit > 0 {
                 let raw_items: Vec<Vec<u8>> = con.lrange(key, 0, limit - 1).await.map_err(|e| e.to_string())?;
-                raw_items
-                    .into_iter()
-                    .map(|b| String::from_utf8(b.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&b).to_string()))
-                    .collect()
+                raw_items.into_iter().map(bytes_to_str).collect()
             } else {
                 Vec::new()
             };
             (KeyValue::List(items), len as usize)
         }
         "set" => {
-            let raw_members: Vec<Vec<u8>> = con.smembers(key).await.map_err(|e| e.to_string())?;
-            let s = raw_members.len();
-            let members: Vec<String> = raw_members
-                .into_iter()
-                .map(|b| String::from_utf8(b.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&b).to_string()))
-                .collect();
+            let s: usize = con.scard(key).await.map_err(|e| e.to_string())?;
+            let raw_members: Vec<Vec<u8>> = if s <= 500 {
+                con.smembers(key).await.map_err(|e| e.to_string())?
+            } else {
+                let (_cur, items): (u64, Vec<Vec<u8>>) = redis::cmd("SSCAN")
+                    .arg(key)
+                    .arg(0)
+                    .arg("COUNT")
+                    .arg(500)
+                    .query_async(con)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                items
+            };
+            let members: Vec<String> = raw_members.into_iter().map(bytes_to_str).collect();
             (KeyValue::Set(members), s)
         }
         "zset" => {
@@ -403,7 +617,7 @@ async fn get_key_detail_impl(
             let zset: Vec<ZSetMember> = members
                 .into_iter()
                 .map(|(m, s)| ZSetMember {
-                    member: String::from_utf8(m.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&m).to_string()),
+                    member: bytes_to_str(m),
                     score: s,
                 })
                 .collect();
@@ -449,24 +663,41 @@ async fn get_key_detail_cluster(
                 .await
                 .map_err(|e| e.to_string())?;
             let s = raw.len();
-            let val_str = match String::from_utf8(raw) {
-                Ok(str_val) => str_val,
-                Err(err) => String::from_utf8_lossy(&err.into_bytes()).to_string(),
-            };
-            (KeyValue::String(val_str), s)
+            (KeyValue::String(bytes_to_str(raw)), s)
         }
         "hash" => {
-            let raw_map: Vec<(Vec<u8>, Vec<u8>)> = redis::cmd("HGETALL")
+            let s: usize = redis::cmd("HLEN")
                 .arg(key)
                 .query_async(con)
                 .await
                 .map_err(|e| e.to_string())?;
-            let s = raw_map.len();
+            let raw_map: Vec<(Vec<u8>, Vec<u8>)> = if s <= 500 {
+                redis::cmd("HGETALL")
+                    .arg(key)
+                    .query_async(con)
+                    .await
+                    .map_err(|e| e.to_string())?
+            } else {
+                let (_cur, flat): (u64, Vec<Vec<u8>>) = redis::cmd("HSCAN")
+                    .arg(key)
+                    .arg(0)
+                    .arg("COUNT")
+                    .arg(500)
+                    .query_async(con)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let mut pairs = Vec::with_capacity(flat.len() / 2);
+                let mut iter = flat.into_iter();
+                while let (Some(f), Some(v)) = (iter.next(), iter.next()) {
+                    pairs.push((f, v));
+                }
+                pairs
+            };
             let fields: Vec<HashField> = raw_map
                 .into_iter()
                 .map(|(f, v)| HashField {
-                    field: String::from_utf8(f.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&f).to_string()),
-                    value: String::from_utf8(v.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&v).to_string()),
+                    field: bytes_to_str(f),
+                    value: bytes_to_str(v),
                 })
                 .collect();
             (KeyValue::Hash(fields), s)
@@ -486,26 +717,36 @@ async fn get_key_detail_cluster(
                     .query_async(con)
                     .await
                     .map_err(|e| e.to_string())?;
-                raw_items
-                    .into_iter()
-                    .map(|b| String::from_utf8(b.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&b).to_string()))
-                    .collect()
+                raw_items.into_iter().map(bytes_to_str).collect()
             } else {
                 Vec::new()
             };
             (KeyValue::List(items), len as usize)
         }
         "set" => {
-            let raw_members: Vec<Vec<u8>> = redis::cmd("SMEMBERS")
+            let s: usize = redis::cmd("SCARD")
                 .arg(key)
                 .query_async(con)
                 .await
                 .map_err(|e| e.to_string())?;
-            let s = raw_members.len();
-            let members: Vec<String> = raw_members
-                .into_iter()
-                .map(|b| String::from_utf8(b.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&b).to_string()))
-                .collect();
+            let raw_members: Vec<Vec<u8>> = if s <= 500 {
+                redis::cmd("SMEMBERS")
+                    .arg(key)
+                    .query_async(con)
+                    .await
+                    .map_err(|e| e.to_string())?
+            } else {
+                let (_cur, items): (u64, Vec<Vec<u8>>) = redis::cmd("SSCAN")
+                    .arg(key)
+                    .arg(0)
+                    .arg("COUNT")
+                    .arg(500)
+                    .query_async(con)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                items
+            };
+            let members: Vec<String> = raw_members.into_iter().map(bytes_to_str).collect();
             (KeyValue::Set(members), s)
         }
         "zset" => {
@@ -525,7 +766,7 @@ async fn get_key_detail_cluster(
             let zset: Vec<ZSetMember> = members
                 .into_iter()
                 .map(|(m, s)| ZSetMember {
-                    member: String::from_utf8(m.clone()).unwrap_or_else(|_| String::from_utf8_lossy(&m).to_string()),
+                    member: bytes_to_str(m),
                     score: s,
                 })
                 .collect();
@@ -613,24 +854,39 @@ pub async fn delete_keys(
     state: State<'_, RedisState>,
     keys: Vec<String>,
 ) -> Result<u64, String> {
+    if keys.is_empty() {
+        return Ok(0);
+    }
     let conn = state.get_active_connection().await?;
     match conn {
         RedisConnection::Standalone(mut con) => {
-            if keys.is_empty() {
-                return Ok(0);
-            }
-            let deleted: u64 = con.del(&keys).await.map_err(|e| e.to_string())?;
-            Ok(deleted)
-        }
-        RedisConnection::Cluster { mut cluster, .. } => {
             let mut total = 0u64;
-            for key in &keys {
-                let d: u64 = redis::cmd("DEL")
-                    .arg(key)
-                    .query_async(&mut cluster)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                total += d;
+            for chunk in keys.chunks(500) {
+                let deleted: u64 = match redis::cmd("UNLINK").arg(chunk).query_async(&mut con).await {
+                    Ok(c) => c,
+                    Err(_) => con.del(chunk).await.map_err(|e| e.to_string())?,
+                };
+                total += deleted;
+            }
+            Ok(total)
+        }
+        RedisConnection::Cluster { cluster, .. } => {
+            let mut total = 0u64;
+            for chunk in keys.chunks(200) {
+                let tasks = chunk.iter().map(|key| {
+                    let mut cl = cluster.clone();
+                    let k = key.clone();
+                    async move {
+                        match redis::cmd("UNLINK").arg(&k).query_async::<u64>(&mut cl).await {
+                            Ok(d) => Ok(d),
+                            Err(_) => redis::cmd("DEL").arg(&k).query_async::<u64>(&mut cl).await,
+                        }
+                    }
+                });
+                let results = futures::future::join_all(tasks).await;
+                for res in results {
+                    total += res.map_err(|e| e.to_string())?;
+                }
             }
             Ok(total)
         }

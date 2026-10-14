@@ -106,19 +106,31 @@
     }
   }
 
-  function getFolderSelectionState(folderKeys: Array<{ name: string }>): { checked: boolean; indeterminate: boolean } {
-    if (folderKeys.length === 0) return { checked: false, indeterminate: false };
-    const selectedCount = folderKeys.filter((k) => $selectedKeys.has(k.name)).length;
+  function getFolderSelectionState(folderKeys: Array<{ name: string }>, selectedSet: Set<string>): { checked: boolean; indeterminate: boolean } {
+    const total = folderKeys.length;
+    if (total === 0 || selectedSet.size === 0) return { checked: false, indeterminate: false };
+    let hasSelected = false;
+    let hasUnselected = false;
+    for (let i = 0; i < total; i++) {
+      if (selectedSet.has(folderKeys[i].name)) {
+        hasSelected = true;
+      } else {
+        hasUnselected = true;
+      }
+      if (hasSelected && hasUnselected) {
+        return { checked: false, indeterminate: true };
+      }
+    }
     return {
-      checked: selectedCount === folderKeys.length,
-      indeterminate: selectedCount > 0 && selectedCount < folderKeys.length,
+      checked: hasSelected && !hasUnselected,
+      indeterminate: false,
     };
   }
 
   function toggleFolderSelect(folderKeys: Array<{ name: string }>, e: MouseEvent) {
     e.stopPropagation();
     const names = folderKeys.map((k) => k.name);
-    const { checked } = getFolderSelectionState(folderKeys);
+    const { checked } = getFolderSelectionState(folderKeys, $selectedKeys);
     if (checked) {
       deselectKeys(names);
     } else {
@@ -346,7 +358,7 @@
     {:else if viewMode === 'tree'}
       <!-- Tree View -->
       {#each grouped.folders as folder (folder.prefix)}
-        {@const folderState = getFolderSelectionState(folder.keys)}
+        {@const folderState = getFolderSelectionState(folder.keys, $selectedKeys)}
         <div class="tree-folder">
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->

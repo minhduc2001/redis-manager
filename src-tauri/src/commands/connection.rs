@@ -95,16 +95,25 @@ pub async fn get_server_info(state: State<'_, RedisState>) -> Result<ServerInfo,
     let mut total_clients: u64 = 0;
     let mut first_info_str = String::new();
 
-    for (_addr, mut con) in master_conns {
-        // Query DBSIZE for accurate key count on this master
-        let dbsize: Result<u64, _> = redis::cmd("DBSIZE").query_async(&mut con).await;
-        if let Ok(count) = dbsize {
-            total_keys_count += count;
+    let tasks = master_conns.into_iter().map(|(_addr, mut con)| async move {
+        // Pipeline DBSIZE and INFO in a single round-trip
+        let mut pipe = redis::pipe();
+        pipe.cmd("DBSIZE").cmd("INFO");
+        if let Ok((count, info)) = pipe.query_async::<(u64, String)>(&mut con).await {
+            return (count, Some(info));
         }
 
-        // Query INFO
-        let info_str: Result<String, _> = redis::cmd("INFO").query_async(&mut con).await;
-        if let Ok(info) = info_str {
+        // Fallback if pipeline fails
+        let count = redis::cmd("DBSIZE").query_async::<u64>(&mut con).await.unwrap_or(0);
+        let info = redis::cmd("INFO").query_async::<String>(&mut con).await.ok();
+        (count, info)
+    });
+
+    let results = futures::future::join_all(tasks).await;
+
+    for (count, info_opt) in results {
+        total_keys_count += count;
+        if let Some(info) = info_opt {
             if first_info_str.is_empty() {
                 first_info_str = info.clone();
             }

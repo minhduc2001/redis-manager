@@ -2,6 +2,7 @@
   import {
     searchPattern,
     searchMode,
+    selectedTypeFilter,
     loadKeys,
     searchKeys,
     filterLocalKeys,
@@ -14,6 +15,15 @@
   let inputValue = '';
   let debounceTimer: ReturnType<typeof setTimeout>;
   let currentMode: SearchMode = 'contains';
+
+  const typeFilters = [
+    { value: 'all', label: 'All' },
+    { value: 'string', label: 'String' },
+    { value: 'hash', label: 'Hash' },
+    { value: 'list', label: 'List' },
+    { value: 'set', label: 'Set' },
+    { value: 'zset', label: 'ZSet' },
+  ];
 
   // Sync mode with store
   searchMode.subscribe((v) => (currentMode = v));
@@ -35,7 +45,7 @@
 
   function handleInput() {
     const val = inputValue.trim();
-    if (!val) {
+    if (!val && $selectedTypeFilter === 'all') {
       clearTimeout(debounceTimer);
       clearSearch();
       return;
@@ -54,7 +64,7 @@
   function doSearch() {
     clearTimeout(debounceTimer);
     const val = inputValue.trim();
-    if (!val) {
+    if (!val && $selectedTypeFilter === 'all') {
       clearSearch();
       return;
     }
@@ -85,6 +95,19 @@
       clearTimeout(debounceTimer);
       doSearch();
     }
+  }
+
+  function setTypeFilter(type: string) {
+    if ($selectedTypeFilter === type) return;
+    selectedTypeFilter.set(type);
+    clearTimeout(debounceTimer);
+    const val = inputValue.trim();
+    if (!val && type === 'all') {
+      clearSearch();
+      return;
+    }
+    filterLocalKeys(val, currentMode, type);
+    searchKeys(val, currentMode);
   }
 
   $: placeholderText = currentMode === 'contains'
@@ -125,6 +148,20 @@
         <span>Exact</span>
       </button>
     </div>
+  </div>
+
+  <div class="type-filter-bar">
+    {#each typeFilters as tf}
+      <button
+        type="button"
+        class="type-chip type-{tf.value}"
+        class:active={$selectedTypeFilter === tf.value}
+        on:click={() => setTypeFilter(tf.value)}
+        title="Filter by {tf.label} type"
+      >
+        {tf.label}
+      </button>
+    {/each}
   </div>
 
   <div class="search-input-wrap">
@@ -216,6 +253,72 @@
     background: var(--bg-tertiary);
     color: var(--accent);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  }
+
+  .type-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    flex-wrap: wrap;
+  }
+
+  .type-chip {
+    flex: 1;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-primary);
+    color: var(--text-muted);
+    font-size: 9px;
+    font-weight: 600;
+    padding: 2px 4px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    text-align: center;
+    font-family: var(--font-sans);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .type-chip:hover:not(.active) {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+    border-color: var(--border-secondary);
+  }
+
+  .type-chip.active {
+    background: rgba(0, 212, 255, 0.14);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .type-chip.type-string.active {
+    background: rgba(0, 230, 118, 0.15);
+    border-color: #00e676;
+    color: #00e676;
+  }
+
+  .type-chip.type-hash.active {
+    background: rgba(0, 212, 255, 0.15);
+    border-color: #00d4ff;
+    color: #00d4ff;
+  }
+
+  .type-chip.type-list.active {
+    background: rgba(255, 171, 64, 0.15);
+    border-color: #ffab40;
+    color: #ffab40;
+  }
+
+  .type-chip.type-set.active {
+    background: rgba(206, 147, 216, 0.15);
+    border-color: #ce93d8;
+    color: #ce93d8;
+  }
+
+  .type-chip.type-zset.active {
+    background: rgba(255, 82, 82, 0.15);
+    border-color: #ff5252;
+    color: #ff5252;
   }
 
   .search-input-wrap {

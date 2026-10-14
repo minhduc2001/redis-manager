@@ -94,9 +94,24 @@
     }
   }
 
-  // Reset search when key changes
+  const DETAIL_PAGE_SIZE = 150;
+  const MAX_HIGHLIGHT_LENGTH = 300_000;
+  let visibleLimit = 100;
+  let lastResultQuery = '';
+
+  // Reset search and pagination when key changes
   $: if ($selectedKey) {
     resultSearchQuery = '';
+    visibleLimit = 100;
+  }
+
+  $: if (resultSearchQuery !== lastResultQuery) {
+    lastResultQuery = resultSearchQuery;
+    visibleLimit = 100;
+  }
+
+  function showMoreDetailRows() {
+    visibleLimit += DETAIL_PAGE_SIZE;
   }
 
   // Filtered collections
@@ -159,9 +174,15 @@
   let jsonFormatted = true;
 
   function tryFormatJson(str: string): { isJson: boolean; formatted: string; highlighted: string } {
+    if (!str || str.length > MAX_HIGHLIGHT_LENGTH) {
+      return { isJson: false, formatted: str || '', highlighted: escapeHtml(str || '') };
+    }
     try {
       const parsed = JSON.parse(str);
       const formatted = JSON.stringify(parsed, null, 2);
+      if (formatted.length > MAX_HIGHLIGHT_LENGTH) {
+        return { isJson: true, formatted, highlighted: escapeHtml(formatted) };
+      }
       return { isJson: true, formatted, highlighted: highlightJson(formatted) };
     } catch {
       return { isJson: false, formatted: str, highlighted: str };
@@ -542,7 +563,7 @@
         {:else if $keyDetail.value.type === 'Hash'}
           <div class="value-header">
             <span class="text-muted">
-              Hash Fields ({filteredHashData.length}{#if resultSearchQuery.trim() && filteredHashData.length !== $keyDetail.size} of {$keyDetail.size}{/if})
+              Hash Fields ({filteredHashData.length}{#if filteredHashData.length !== $keyDetail.size} of {$keyDetail.size}{/if})
             </span>
           </div>
           <div class="table-container">
@@ -565,7 +586,7 @@
                     </td>
                   </tr>
                 {:else}
-                  {#each filteredHashData as item}
+                  {#each filteredHashData.slice(0, visibleLimit) as item}
                     <tr>
                       <td class="mono">
                         {#if resultSearchQuery.trim()}
@@ -618,6 +639,13 @@
               </tbody>
             </table>
           </div>
+          {#if filteredHashData.length > visibleLimit}
+            <div class="detail-load-more">
+              <button class="btn btn-sm" on:click={showMoreDetailRows}>
+                Show more ({Math.min(visibleLimit, filteredHashData.length)} / {filteredHashData.length})
+              </button>
+            </div>
+          {/if}
           <div class="add-row">
             <input class="input input-mono" bind:value={newHashField} placeholder="Field name" />
             <input class="input input-mono" bind:value={newHashValue} placeholder="Value" />
@@ -630,7 +658,7 @@
         {:else if $keyDetail.value.type === 'List'}
           <div class="value-header">
             <span class="text-muted">
-              List Items ({filteredListData.length}{#if resultSearchQuery.trim() && filteredListData.length !== $keyDetail.size} of {$keyDetail.size}{/if})
+              List Items ({filteredListData.length}{#if filteredListData.length !== $keyDetail.size} of {$keyDetail.size}{/if})
             </span>
           </div>
           {#if filteredListData.length === 0}
@@ -640,7 +668,7 @@
             </div>
           {:else}
             <div class="list-items">
-              {#each filteredListData as { item, originalIndex }}
+              {#each filteredListData.slice(0, visibleLimit) as { item, originalIndex }}
                 <div class="list-item">
                   <span class="item-index">{originalIndex}</span>
                   <span class="mono truncate cell-item-text" title={item}>
@@ -665,6 +693,13 @@
                 </div>
               {/each}
             </div>
+            {#if filteredListData.length > visibleLimit}
+              <div class="detail-load-more">
+                <button class="btn btn-sm" on:click={showMoreDetailRows}>
+                  Show more ({Math.min(visibleLimit, filteredListData.length)} / {filteredListData.length})
+                </button>
+              </div>
+            {/if}
           {/if}
           <div class="add-row">
             <input class="input input-mono" bind:value={newListItem} placeholder="New item value" on:keydown={(e) => e.key === 'Enter' && handleAddListItem()} />
@@ -677,7 +712,7 @@
         {:else if $keyDetail.value.type === 'Set'}
           <div class="value-header">
             <span class="text-muted">
-              Set Members ({filteredSetData.length}{#if resultSearchQuery.trim() && filteredSetData.length !== $keyDetail.size} of {$keyDetail.size}{/if})
+              Set Members ({filteredSetData.length}{#if filteredSetData.length !== $keyDetail.size} of {$keyDetail.size}{/if})
             </span>
           </div>
           {#if filteredSetData.length === 0}
@@ -687,7 +722,7 @@
             </div>
           {:else}
             <div class="list-items">
-              {#each filteredSetData as { item, originalIndex }}
+              {#each filteredSetData.slice(0, visibleLimit) as { item, originalIndex }}
                 <div class="list-item">
                   <span class="mono truncate cell-item-text" title={item}>
                     {#if resultSearchQuery.trim()}
@@ -711,6 +746,13 @@
                 </div>
               {/each}
             </div>
+            {#if filteredSetData.length > visibleLimit}
+              <div class="detail-load-more">
+                <button class="btn btn-sm" on:click={showMoreDetailRows}>
+                  Show more ({Math.min(visibleLimit, filteredSetData.length)} / {filteredSetData.length})
+                </button>
+              </div>
+            {/if}
           {/if}
           <div class="add-row">
             <input class="input input-mono" bind:value={newSetMember} placeholder="New member" on:keydown={(e) => e.key === 'Enter' && handleAddSetMember()} />
@@ -723,7 +765,7 @@
         {:else if $keyDetail.value.type === 'ZSet'}
           <div class="value-header">
             <span class="text-muted">
-              Sorted Set ({filteredZSetData.length}{#if resultSearchQuery.trim() && filteredZSetData.length !== $keyDetail.size} of {$keyDetail.size}{/if})
+              Sorted Set ({filteredZSetData.length}{#if filteredZSetData.length !== $keyDetail.size} of {$keyDetail.size}{/if})
             </span>
           </div>
           <div class="table-container">
@@ -746,7 +788,7 @@
                     </td>
                   </tr>
                 {:else}
-                  {#each filteredZSetData as item, i}
+                  {#each filteredZSetData.slice(0, visibleLimit) as item, i}
                     <tr>
                       <td class="mono text-accent">
                         {#if resultSearchQuery.trim()}
@@ -782,6 +824,13 @@
               </tbody>
             </table>
           </div>
+          {#if filteredZSetData.length > visibleLimit}
+            <div class="detail-load-more">
+              <button class="btn btn-sm" on:click={showMoreDetailRows}>
+                Show more ({Math.min(visibleLimit, filteredZSetData.length)} / {filteredZSetData.length})
+              </button>
+            </div>
+          {/if}
           <div class="add-row">
             <input class="input input-mono" style="max-width: 110px;" type="number" step="any" bind:value={newZSetScore} placeholder="Score" />
             <input class="input input-mono" bind:value={newZSetMember} placeholder="New member name" on:keydown={(e) => e.key === 'Enter' && handleAddZSetMember()} />
@@ -1055,6 +1104,12 @@
   }
   .list-item:hover .item-actions {
     opacity: 1;
+  }
+
+  .detail-load-more {
+    display: flex;
+    justify-content: center;
+    padding: 8px 0 0;
   }
 
   .add-row {

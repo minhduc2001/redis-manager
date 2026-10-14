@@ -42,6 +42,7 @@ export const isLoading = writable(false);
 export const isSearching = writable(false);
 export const searchPattern = writable('*');
 export const searchMode = writable<SearchMode>('contains');
+export const selectedTypeFilter = writable<string>('all');
 export const selectedKey = writable<string | null>(null);
 export const selectedKeys = writable<Set<string>>(new Set());
 export const keyDetail = writable<KeyDetail | null>(null);
@@ -127,20 +128,16 @@ export async function connectRedis(url: string, password?: string, name?: string
     });
     isConnected.set(true);
     activeConnectionId.set(info.id);
+    selectedTypeFilter.set('all');
 
-    // Refresh tab list
-    await refreshConnectionTabs();
-
-    // Load server info
-    try {
-      const sInfo = await tauriInvoke<ServerInfo>('get_server_info');
-      serverInfo.set(sInfo);
-    } catch (e) {
-      console.warn('Failed to get server info:', e);
-    }
-
-    // Load initial keys
-    await loadKeys('*', true);
+    // Run tab refresh, server info, and initial key scan concurrently in parallel
+    await Promise.all([
+      refreshConnectionTabs(),
+      tauriInvoke<ServerInfo>('get_server_info')
+        .then((sInfo) => serverInfo.set(sInfo))
+        .catch((e) => console.warn('Failed to get server info:', e)),
+      loadKeys('*', true),
+    ]);
 
     // Save active connections list
     saveActiveConnections();
@@ -221,6 +218,7 @@ export async function disconnectRedis(id?: string) {
       browseHasMore.set(true);
       scanCursor.set('0');
       hasMore.set(true);
+      selectedTypeFilter.set('all');
       selectedKey.set(null);
       selectedKeys.set(new Set());
       keyDetail.set(null);
@@ -246,6 +244,7 @@ export async function switchConnection(id: string) {
     browseHasMore.set(true);
     scanCursor.set('0');
     hasMore.set(true);
+    selectedTypeFilter.set('all');
     selectedKey.set(null);
     keyDetail.set(null);
     selectedKeys.set(new Set());
@@ -253,19 +252,15 @@ export async function switchConnection(id: string) {
 
     await tauriInvoke('set_active_connection', { id });
     activeConnectionId.set(id);
-    await refreshConnectionTabs();
 
-    try {
-      const sInfo = await tauriInvoke<ServerInfo>('get_server_info');
-      serverInfo.set(sInfo);
-    } catch (e) {
-      console.warn('Failed to get server info:', e);
-    }
-
-    selectedKey.set(null);
-    keyDetail.set(null);
-    selectedKeys.set(new Set());
-    await loadKeys('*', true);
+    // Run tab refresh, server info, and initial key scan concurrently in parallel
+    await Promise.all([
+      refreshConnectionTabs(),
+      tauriInvoke<ServerInfo>('get_server_info')
+        .then((sInfo) => serverInfo.set(sInfo))
+        .catch((e) => console.warn('Failed to get server info:', e)),
+      loadKeys('*', true),
+    ]);
   } catch (e: any) {
     error.set(e.toString());
   } finally {
@@ -319,15 +314,20 @@ export async function loadKeys(pattern?: string, reset = false) {
     const unsub2 = searchPattern.subscribe((v) => (currentPattern = v));
     unsub2();
 
+    let currentType = 'all';
+    const unsubType = selectedTypeFilter.subscribe((v) => (currentType = v));
+    unsubType();
+
     const result = await tauriInvoke<ScanResult>('scan_keys', {
       pattern: currentPattern,
       cursor: currentCursor,
       count: 1000,
+      keyType: currentType === 'all' ? null : currentType,
     });
 
     if (reset) {
       keys.set(result.keys);
-      if (currentPattern === '*') {
+      if (currentPattern === '*' && currentType === 'all') {
         browseKeys.set(result.keys);
         browseCursor.set(result.cursor);
         browseHasMore.set(result.cursor !== '0');
@@ -337,7 +337,7 @@ export async function loadKeys(pattern?: string, reset = false) {
         const existingNames = new Set(existing.map((k) => k.name));
         const newKeys = result.keys.filter((k) => !existingNames.has(k.name));
         const merged = [...existing, ...newKeys];
-        if (currentPattern === '*') {
+        if (currentPattern === '*' && currentType === 'all') {
           browseKeys.set(merged);
           browseCursor.set(result.cursor);
           browseHasMore.set(result.cursor !== '0');
@@ -355,9 +355,15 @@ export async function loadKeys(pattern?: string, reset = false) {
   }
 }
 
-export function filterLocalKeys(query: string, mode: SearchMode) {
+export function filterLocalKeys(query: string, mode: SearchMode, typeOverride?: string) {
   const trimmed = query.trim();
-  if (!trimmed) {
+  let currentType = typeOverride ?? 'all';
+  if (typeOverride === undefined) {
+    const unsubT = selectedTypeFilter.subscribe((v) => (currentType = v));
+    unsubT();
+  }
+
+  if (!trimmed && currentType === 'all') {
     clearSearch();
     return;
   }
@@ -369,15 +375,21 @@ export function filterLocalKeys(query: string, mode: SearchMode) {
   if (allBrowse.length === 0) return;
 
   const qLower = trimmed.toLowerCase();
-  let filtered: KeyEntry[];
+  let filtered = allBrowse;
 
-  if (mode === 'exact') {
-    filtered = allBrowse.filter((k) => k.name === trimmed);
-  } else if (mode === 'prefix') {
-    filtered = allBrowse.filter((k) => k.name.toLowerCase().startsWith(qLower));
-  } else {
-    // Contains
-    filtered = allBrowse.filter((k) => k.name.toLowerCase().includes(qLower));
+  if (currentType !== 'all') {
+    filtered = filtered.filter((k) => k.key_type === currentType);
+  }
+
+  if (trimmed) {
+    if (mode === 'exact') {
+      filtered = filtered.filter((k) => k.name === trimmed);
+    } else if (mode === 'prefix') {
+      filtered = filtered.filter((k) => k.name.toLowerCase().startsWith(qLower));
+    } else {
+      // Contains
+      filtered = filtered.filter((k) => k.name.toLowerCase().includes(qLower));
+    }
   }
 
   keys.set(filtered);
@@ -386,11 +398,16 @@ export function filterLocalKeys(query: string, mode: SearchMode) {
 export function clearSearch() {
   activeSearchSeq++;
   isSearching.set(false);
+
+  let currentType = 'all';
+  const unsubT = selectedTypeFilter.subscribe((v) => (currentType = v));
+  unsubT();
+
   let bKeys: KeyEntry[] = [];
   const unsubKeys = browseKeys.subscribe((v) => (bKeys = v));
   unsubKeys();
 
-  if (bKeys.length > 0) {
+  if (bKeys.length > 0 && currentType === 'all') {
     keys.set(bKeys);
     let bCur = '0';
     const unsubCur = browseCursor.subscribe((v) => (bCur = v));
@@ -402,6 +419,10 @@ export function clearSearch() {
     unsubMore();
     hasMore.set(bMore);
     searchPattern.set('*');
+  } else if (bKeys.length > 0 && currentType !== 'all') {
+    keys.set(bKeys.filter((k) => k.key_type === currentType));
+    searchPattern.set('*');
+    searchKeys('*', 'contains');
   } else {
     loadKeys('*', true);
   }
@@ -413,14 +434,20 @@ export async function searchKeys(pattern: string, mode: SearchMode) {
     isSearching.set(true);
     error.set(null);
 
+    let currentType = 'all';
+    const unsubT = selectedTypeFilter.subscribe((v) => (currentType = v));
+    unsubT();
+
     const trimmed = pattern.trim();
-    if (!trimmed) {
+    if (!trimmed && currentType === 'all') {
       clearSearch();
       return;
     }
 
     let searchPat: string;
-    if (trimmed.includes('*') || trimmed.includes('?')) {
+    if (!trimmed || trimmed === '*') {
+      searchPat = '*';
+    } else if (trimmed.includes('*') || trimmed.includes('?')) {
       searchPat = trimmed;
     } else if (mode === 'exact') {
       searchPat = trimmed;
@@ -435,11 +462,15 @@ export async function searchKeys(pattern: string, mode: SearchMode) {
     searchMode.set(mode);
 
     // If exact mode without wildcards, attempt direct lookup first for instant result
-    if (mode === 'exact' && !trimmed.includes('*') && !trimmed.includes('?')) {
+    if (mode === 'exact' && trimmed && !trimmed.includes('*') && !trimmed.includes('?')) {
       try {
         const detail = await tauriInvoke<KeyDetail>('get_key_detail', { key: trimmed });
         if (seq !== activeSearchSeq) return;
-        keys.set([{ name: detail.key, key_type: detail.key_type }]);
+        if (currentType === 'all' || detail.key_type === currentType) {
+          keys.set([{ name: detail.key, key_type: detail.key_type }]);
+        } else {
+          keys.set([]);
+        }
         scanCursor.set('0');
         hasMore.set(false);
         return;
@@ -453,6 +484,7 @@ export async function searchKeys(pattern: string, mode: SearchMode) {
       pattern: searchPat,
       cursor: '0',
       count: 1000,
+      keyType: currentType === 'all' ? null : currentType,
     });
 
     if (seq !== activeSearchSeq) return;
