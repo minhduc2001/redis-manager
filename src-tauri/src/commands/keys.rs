@@ -48,6 +48,147 @@ pub struct ZSetMember {
     pub score: f64,
 }
 
+const LUA_SCAN: &str = r#"
+local cur = ARGV[1]
+local pat = ARGV[2]
+local target = tonumber(ARGV[3]) or 500
+local hint = tonumber(ARGV[4]) or 10000
+local max_iter = tonumber(ARGV[5]) or 60
+local keys = {}
+local types = {}
+local seen = {}
+local iter = 0
+
+repeat
+    iter = iter + 1
+    local res = redis.call('SCAN', cur, 'MATCH', pat, 'COUNT', hint)
+    cur = tostring(res[1])
+    local batch = res[2]
+    for i = 1, #batch do
+        local k = batch[i]
+        if not seen[k] then
+            seen[k] = true
+            table.insert(keys, k)
+            local t = redis.call('TYPE', k)
+            local ts = (type(t) == 'table' and (t.ok or t[1])) or tostring(t)
+            table.insert(types, ts)
+            if #keys >= target then
+                break
+            end
+        end
+    end
+until cur == '0' or #keys >= target or iter >= max_iter
+
+return {cur, keys, types}
+"#;
+
+async fn scan_node_lua(
+    con: &mut redis::aio::MultiplexedConnection,
+    cursor: u64,
+    pattern: &str,
+    target: usize,
+    scan_hint: u64,
+    max_iter: usize,
+) -> Result<(u64, Vec<KeyEntry>), String> {
+    let (next_cur_str, raw_keys, raw_types): (String, Vec<String>, Vec<String>) = redis::cmd("EVAL")
+        .arg(LUA_SCAN)
+        .arg(0)
+        .arg(cursor.to_string())
+        .arg(pattern)
+        .arg(target)
+        .arg(scan_hint)
+        .arg(max_iter)
+        .query_async(con)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let next_cursor = next_cur_str.parse::<u64>().unwrap_or(0);
+    let entries = raw_keys
+        .into_iter()
+        .zip(raw_types)
+        .map(|(name, key_type)| KeyEntry { name, key_type })
+        .collect();
+
+    Ok((next_cursor, entries))
+}
+
+async fn scan_node_native(
+    con: &mut redis::aio::MultiplexedConnection,
+    cursor: u64,
+    pattern: &str,
+    target: usize,
+    scan_hint: u64,
+    max_iter: usize,
+) -> Result<(u64, Vec<KeyEntry>), String> {
+    let mut cur = cursor;
+    let mut raw_keys = Vec::new();
+    let mut seen = HashSet::new();
+    let mut iterations = 0;
+
+    loop {
+        iterations += 1;
+        let (new_cur, batch): (u64, Vec<String>) = redis::cmd("SCAN")
+            .arg(cur)
+            .arg("MATCH")
+            .arg(pattern)
+            .arg("COUNT")
+            .arg(scan_hint)
+            .query_async(con)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        for k in batch {
+            if seen.insert(k.clone()) {
+                raw_keys.push(k);
+            }
+        }
+
+        cur = new_cur;
+
+        if cur == 0 || raw_keys.len() >= target || iterations >= max_iter {
+            break;
+        }
+    }
+
+    let mut entries = Vec::with_capacity(raw_keys.len());
+    if !raw_keys.is_empty() {
+        for chunk in raw_keys.chunks(500) {
+            let mut pipe = redis::pipe();
+            for key in chunk {
+                pipe.cmd("TYPE").arg(key);
+            }
+            let types: Vec<String> = pipe
+                .query_async(con)
+                .await
+                .unwrap_or_else(|_| vec!["unknown".to_string(); chunk.len()]);
+
+            for (name, key_type) in chunk.iter().cloned().zip(types) {
+                entries.push(KeyEntry { name, key_type });
+            }
+        }
+    }
+
+    Ok((cur, entries))
+}
+
+async fn scan_single_node(
+    con: &mut redis::aio::MultiplexedConnection,
+    cursor: u64,
+    pattern: &str,
+    target: usize,
+    scan_hint: u64,
+    max_iter: usize,
+) -> Result<(u64, Vec<KeyEntry>), String> {
+    // Try ultra-fast server-side Lua scan first (1 network round-trip instead of 60)
+    match scan_node_lua(con, cursor, pattern, target, scan_hint, max_iter).await {
+        Ok(res) => Ok(res),
+        Err(_) => {
+            // Graceful fallback to native SCAN pipeline
+            scan_node_native(con, cursor, pattern, target, scan_hint, max_iter).await
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn scan_keys(
     state: State<'_, RedisState>,
@@ -56,72 +197,52 @@ pub async fn scan_keys(
     count: u64,
 ) -> Result<ScanResult, String> {
     let pattern = if pattern.trim().is_empty() { "*".to_string() } else { pattern };
+    let is_first_run = cursor == "0" || cursor.trim().is_empty();
+
+    // Fast path: if pattern has no wildcards (* or ?), perform instant O(1) lookup
+    if is_first_run && !pattern.contains('*') && !pattern.contains('?') {
+        if let Ok(conn) = state.get_active_connection().await {
+            let type_check: Result<String, _> = match conn {
+                RedisConnection::Standalone(mut con) => {
+                    redis::cmd("TYPE").arg(&pattern).query_async(&mut con).await
+                }
+                RedisConnection::Cluster { mut cluster, .. } => {
+                    redis::cmd("TYPE").arg(&pattern).query_async(&mut cluster).await
+                }
+            };
+            if let Ok(ktype) = type_check {
+                if ktype != "none" {
+                    return Ok(ScanResult {
+                        cursor: "0".to_string(),
+                        keys: vec![KeyEntry {
+                            name: pattern,
+                            key_type: ktype,
+                        }],
+                    });
+                }
+            }
+        }
+    }
+
     let master_conns = state.get_master_connections().await?;
 
     if master_conns.len() <= 1 {
         // Standalone or single node
         let mut con = master_conns.into_iter().next().map(|(_, c)| c).ok_or("No connection")?;
-        let mut cur: u64 = cursor.parse().unwrap_or(0);
+        let cur: u64 = cursor.parse().unwrap_or(0);
         let target = count.max(500) as usize;
-        let scan_hint = 2000u64.max(count);
-        let mut raw_keys = Vec::new();
-        let mut seen = HashSet::new();
-        let mut iterations = 0;
-        const MAX_ITER: usize = 60;
+        let scan_hint = 10000u64.max(count * 5);
 
-        loop {
-            iterations += 1;
-            let (new_cur, batch): (u64, Vec<String>) = redis::cmd("SCAN")
-                .arg(cur)
-                .arg("MATCH")
-                .arg(&pattern)
-                .arg("COUNT")
-                .arg(scan_hint)
-                .query_async(&mut con)
-                .await
-                .map_err(|e| e.to_string())?;
-
-            for k in batch {
-                if seen.insert(k.clone()) {
-                    raw_keys.push(k);
-                }
-            }
-
-            cur = new_cur;
-
-            if cur == 0 || raw_keys.len() >= target || iterations >= MAX_ITER {
-                break;
-            }
-        }
-
-        let mut entries = Vec::with_capacity(raw_keys.len());
-        if !raw_keys.is_empty() {
-            for chunk in raw_keys.chunks(500) {
-                let mut pipe = redis::pipe();
-                for key in chunk {
-                    pipe.cmd("TYPE").arg(key);
-                }
-                let types: Vec<String> = pipe
-                    .query_async(&mut con)
-                    .await
-                    .unwrap_or_else(|_| vec!["unknown".to_string(); chunk.len()]);
-
-                for (name, key_type) in chunk.iter().cloned().zip(types) {
-                    entries.push(KeyEntry { name, key_type });
-                }
-            }
-        }
+        let (next_cursor, entries) = scan_single_node(&mut con, cur, &pattern, target, scan_hint, 60).await?;
 
         Ok(ScanResult {
-            cursor: cur.to_string(),
+            cursor: next_cursor.to_string(),
             keys: entries,
         })
     } else {
-        // Cluster: parse compound cursor "node0:cur0;node1:cur1..."
+        // Cluster: parse compound cursor "node0:cur0;node1:cur1..." and query master nodes concurrently
         let num_nodes = master_conns.len();
         let mut node_cursors: Vec<u64> = vec![0; num_nodes];
-
-        let is_first_run = cursor == "0" || cursor.trim().is_empty();
 
         if !is_first_run {
             for part in cursor.split(';') {
@@ -138,61 +259,34 @@ pub async fn scan_keys(
 
         let target_total = count.max(500) as usize;
         let per_node_target = (target_total / num_nodes).max(100);
-        let scan_hint = 2000u64.max(count / (num_nodes as u64));
+        let scan_hint = 10000u64.max((count * 5) / (num_nodes as u64));
+
+        let mut node_tasks = Vec::with_capacity(num_nodes);
+        for (idx, (_addr, mut con)) in master_conns.into_iter().enumerate() {
+            let cur = node_cursors[idx];
+            let pat = pattern.clone();
+            node_tasks.push(async move {
+                if !is_first_run && cur == 0 {
+                    return (idx, 0u64, Vec::new());
+                }
+                match scan_single_node(&mut con, cur, &pat, per_node_target, scan_hint, 60).await {
+                    Ok((next_cur, entries)) => (idx, next_cur, entries),
+                    Err(_) => (idx, cur, Vec::new()),
+                }
+            });
+        }
+
+        // Parallel scan across all master nodes
+        let results = futures::future::join_all(node_tasks).await;
+
         let mut all_entries = Vec::new();
         let mut seen = HashSet::new();
 
-        for (idx, (_addr, mut con)) in master_conns.into_iter().enumerate() {
-            let mut cur = node_cursors[idx];
-            if !is_first_run && cur == 0 {
-                continue;
-            }
-
-            let mut node_raw_keys = Vec::new();
-            let mut node_iterations = 0;
-            const NODE_MAX_ITER: usize = 60;
-
-            loop {
-                node_iterations += 1;
-                let (new_cur, batch): (u64, Vec<String>) = redis::cmd("SCAN")
-                    .arg(cur)
-                    .arg("MATCH")
-                    .arg(&pattern)
-                    .arg("COUNT")
-                    .arg(scan_hint)
-                    .query_async(&mut con)
-                    .await
-                    .map_err(|e| e.to_string())?;
-
-                for k in batch {
-                    if seen.insert(k.clone()) {
-                        node_raw_keys.push(k);
-                    }
-                }
-
-                cur = new_cur;
-
-                if cur == 0 || node_raw_keys.len() >= per_node_target || node_iterations >= NODE_MAX_ITER {
-                    break;
-                }
-            }
-
-            node_cursors[idx] = cur;
-
-            if !node_raw_keys.is_empty() {
-                for chunk in node_raw_keys.chunks(500) {
-                    let mut pipe = redis::pipe();
-                    for key in chunk {
-                        pipe.cmd("TYPE").arg(key);
-                    }
-                    let types: Vec<String> = pipe
-                        .query_async(&mut con)
-                        .await
-                        .unwrap_or_else(|_| vec!["unknown".to_string(); chunk.len()]);
-
-                    for (name, key_type) in chunk.iter().cloned().zip(types) {
-                        all_entries.push(KeyEntry { name, key_type });
-                    }
+        for (idx, next_cur, entries) in results {
+            node_cursors[idx] = next_cur;
+            for entry in entries {
+                if seen.insert(entry.name.clone()) {
+                    all_entries.push(entry);
                 }
             }
         }
@@ -224,6 +318,7 @@ pub async fn search_keys(
 ) -> Result<ScanResult, String> {
     scan_keys(state, pattern, "0".to_string(), max_results.unwrap_or(1000)).await
 }
+
 
 #[tauri::command]
 pub async fn get_key_detail(

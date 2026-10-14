@@ -5,7 +5,7 @@
 
   export let onClose: () => void = () => {};
 
-  let appVersion = '0.1.7';
+  let appVersion = '0.1.8';
 
   onMount(async () => {
     try {

@@ -1,5 +1,14 @@
 <script lang="ts">
-  import { searchPattern, searchMode, loadKeys, searchKeys, isLoading, isSearching } from '$lib/stores/redis';
+  import {
+    searchPattern,
+    searchMode,
+    loadKeys,
+    searchKeys,
+    filterLocalKeys,
+    clearSearch,
+    isLoading,
+    isSearching
+  } from '$lib/stores/redis';
   import type { SearchMode } from '$lib/types';
 
   let inputValue = '';
@@ -25,30 +34,42 @@
   }
 
   function handleInput() {
+    const val = inputValue.trim();
+    if (!val) {
+      clearTimeout(debounceTimer);
+      clearSearch();
+      return;
+    }
+
+    // 1. Instant client-side filtering (0ms) for keys already loaded in memory
+    filterLocalKeys(val, currentMode);
+
+    // 2. Debounced background scan in Redis (250ms) to discover additional keys
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
-      doSearch();
-    }, 350);
+      searchKeys(val, currentMode);
+    }, 250);
   }
 
   function doSearch() {
+    clearTimeout(debounceTimer);
     const val = inputValue.trim();
     if (!val) {
-      // Empty search — reload all keys (browse mode)
-      loadKeys('*', true);
+      clearSearch();
       return;
     }
+    filterLocalKeys(val, currentMode);
     searchKeys(val, currentMode);
   }
 
   function handleClear() {
+    clearTimeout(debounceTimer);
     inputValue = '';
-    loadKeys('*', true);
+    clearSearch();
   }
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter') {
-      clearTimeout(debounceTimer);
       doSearch();
     } else if (e.key === 'Escape') {
       handleClear();
@@ -60,6 +81,7 @@
     currentMode = mode;
     searchMode.set(mode);
     if (inputValue.trim()) {
+      filterLocalKeys(inputValue.trim(), mode);
       clearTimeout(debounceTimer);
       doSearch();
     }

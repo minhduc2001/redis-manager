@@ -33,6 +33,9 @@ export const serverInfo = writable<ServerInfo | null>(null);
 
 // Keys state
 export const keys = writable<KeyEntry[]>([]);
+export const browseKeys = writable<KeyEntry[]>([]);
+export const browseCursor = writable<string>('0');
+export const browseHasMore = writable<boolean>(true);
 export const scanCursor = writable<string>('0');
 export const hasMore = writable(true);
 export const isLoading = writable(false);
@@ -43,6 +46,7 @@ export const selectedKey = writable<string | null>(null);
 export const selectedKeys = writable<Set<string>>(new Set());
 export const keyDetail = writable<KeyDetail | null>(null);
 export const isLoadingDetail = writable(false);
+let activeSearchSeq = 0;
 
 // Error state
 export const error = writable<string | null>(null);
@@ -212,6 +216,9 @@ export async function disconnectRedis(id?: string) {
       activeConnectionId.set(null);
       serverInfo.set(null);
       keys.set([]);
+      browseKeys.set([]);
+      browseCursor.set('0');
+      browseHasMore.set(true);
       scanCursor.set('0');
       hasMore.set(true);
       selectedKey.set(null);
@@ -234,6 +241,9 @@ export async function switchConnection(id: string) {
     error.set(null);
 
     keys.set([]);
+    browseKeys.set([]);
+    browseCursor.set('0');
+    browseHasMore.set(true);
     scanCursor.set('0');
     hasMore.set(true);
     selectedKey.set(null);
@@ -317,11 +327,22 @@ export async function loadKeys(pattern?: string, reset = false) {
 
     if (reset) {
       keys.set(result.keys);
+      if (currentPattern === '*') {
+        browseKeys.set(result.keys);
+        browseCursor.set(result.cursor);
+        browseHasMore.set(result.cursor !== '0');
+      }
     } else {
       keys.update((existing) => {
         const existingNames = new Set(existing.map((k) => k.name));
         const newKeys = result.keys.filter((k) => !existingNames.has(k.name));
-        return [...existing, ...newKeys];
+        const merged = [...existing, ...newKeys];
+        if (currentPattern === '*') {
+          browseKeys.set(merged);
+          browseCursor.set(result.cursor);
+          browseHasMore.set(result.cursor !== '0');
+        }
+        return merged;
       });
     }
 
@@ -334,18 +355,72 @@ export async function loadKeys(pattern?: string, reset = false) {
   }
 }
 
+export function filterLocalKeys(query: string, mode: SearchMode) {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    clearSearch();
+    return;
+  }
+
+  let allBrowse: KeyEntry[] = [];
+  const unsub = browseKeys.subscribe((v) => (allBrowse = v));
+  unsub();
+
+  if (allBrowse.length === 0) return;
+
+  const qLower = trimmed.toLowerCase();
+  let filtered: KeyEntry[];
+
+  if (mode === 'exact') {
+    filtered = allBrowse.filter((k) => k.name === trimmed);
+  } else if (mode === 'prefix') {
+    filtered = allBrowse.filter((k) => k.name.toLowerCase().startsWith(qLower));
+  } else {
+    // Contains
+    filtered = allBrowse.filter((k) => k.name.toLowerCase().includes(qLower));
+  }
+
+  keys.set(filtered);
+}
+
+export function clearSearch() {
+  activeSearchSeq++;
+  isSearching.set(false);
+  let bKeys: KeyEntry[] = [];
+  const unsubKeys = browseKeys.subscribe((v) => (bKeys = v));
+  unsubKeys();
+
+  if (bKeys.length > 0) {
+    keys.set(bKeys);
+    let bCur = '0';
+    const unsubCur = browseCursor.subscribe((v) => (bCur = v));
+    unsubCur();
+    scanCursor.set(bCur);
+
+    let bMore = false;
+    const unsubMore = browseHasMore.subscribe((v) => (bMore = v));
+    unsubMore();
+    hasMore.set(bMore);
+    searchPattern.set('*');
+  } else {
+    loadKeys('*', true);
+  }
+}
+
 export async function searchKeys(pattern: string, mode: SearchMode) {
+  const seq = ++activeSearchSeq;
   try {
     isSearching.set(true);
-    isLoading.set(true);
     error.set(null);
 
     const trimmed = pattern.trim();
-    let searchPat: string;
-
     if (!trimmed) {
-      searchPat = '*';
-    } else if (trimmed.includes('*') || trimmed.includes('?')) {
+      clearSearch();
+      return;
+    }
+
+    let searchPat: string;
+    if (trimmed.includes('*') || trimmed.includes('?')) {
       searchPat = trimmed;
     } else if (mode === 'exact') {
       searchPat = trimmed;
@@ -363,6 +438,7 @@ export async function searchKeys(pattern: string, mode: SearchMode) {
     if (mode === 'exact' && !trimmed.includes('*') && !trimmed.includes('?')) {
       try {
         const detail = await tauriInvoke<KeyDetail>('get_key_detail', { key: trimmed });
+        if (seq !== activeSearchSeq) return;
         keys.set([{ name: detail.key, key_type: detail.key_type }]);
         scanCursor.set('0');
         hasMore.set(false);
@@ -379,14 +455,25 @@ export async function searchKeys(pattern: string, mode: SearchMode) {
       count: 1000,
     });
 
-    keys.set(result.keys);
+    if (seq !== activeSearchSeq) return;
+
+    // Merge server results with existing keys to prevent visual flicker
+    keys.update((existing) => {
+      const existingNames = new Set(existing.map((k) => k.name));
+      const newKeys = result.keys.filter((k) => !existingNames.has(k.name));
+      return [...existing, ...newKeys];
+    });
+
     scanCursor.set(result.cursor);
     hasMore.set(result.cursor !== '0');
   } catch (e: any) {
-    error.set(e.toString());
+    if (seq === activeSearchSeq) {
+      error.set(e.toString());
+    }
   } finally {
-    isLoading.set(false);
-    isSearching.set(false);
+    if (seq === activeSearchSeq) {
+      isSearching.set(false);
+    }
   }
 }
 
@@ -394,6 +481,7 @@ export async function filterByFolder(prefix: string) {
   const delimiter = prefix.includes('.') && !prefix.includes(':') ? '.' : ':';
   const query = prefix.endsWith(':') || prefix.endsWith('.') ? prefix : `${prefix}${delimiter}`;
   searchMode.set('prefix');
+  filterLocalKeys(query, 'prefix');
   await searchKeys(query, 'prefix');
 }
 
@@ -429,6 +517,7 @@ export async function deleteSelectedKeys(keysToDelete: string[]) {
     error.set(null);
     await tauriInvoke<number>('delete_keys', { keys: keysToDelete });
     keys.update((list) => list.filter((k) => !keysToDelete.includes(k.name)));
+    browseKeys.update((list) => list.filter((k) => !keysToDelete.includes(k.name)));
     selectedKeys.set(new Set());
 
     let currentSelected: string | null = null;
@@ -532,6 +621,9 @@ export async function renameRedisKey(oldKey: string, newKey: string) {
     error.set(null);
     await tauriInvoke('rename_key', { oldKey, newKey });
     keys.update((list) =>
+      list.map((k) => (k.name === oldKey ? { ...k, name: newKey } : k))
+    );
+    browseKeys.update((list) =>
       list.map((k) => (k.name === oldKey ? { ...k, name: newKey } : k))
     );
     selectedKey.set(newKey);

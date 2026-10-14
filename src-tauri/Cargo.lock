@@ -3102,8 +3102,9 @@ dependencies = [
 
 [[package]]
 name = "redis-manager"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
+ "futures",
  "redis",
  "serde",
  "serde_json",
